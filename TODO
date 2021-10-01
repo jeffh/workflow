@@ -1,0 +1,15 @@
+[ ] Visualizations
+  [ ] GraphViz
+  [ ] Xstate
+  [ ] Sketch.System
+[ ] Testing
+  [ ] QuickCheck / Test Check
+  [ ] Static Analysis
+[ ] Extensions
+  [ ] Custom serialization?
+[ ] Consider Input handling?
+  [ ] Queues
+  [ ] HTTP
+[ ] Explore
+  [ ] Cross-Compile
+  [ ] ClojureScript / Frontend Web
