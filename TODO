@@ -1,4 +1,9 @@
-[ ] Visualizations
+[ ] Visualizations to export / supprt
+  [ ] Flow Charts
+  [ ] Sequence Diagrams
+  [ ] Visualization via State Machine
+  [ ] Visualization of an execution
+	[ ] Stepping through execution
   [ ] GraphViz
   [ ] Xstate
   [ ] Sketch.System
@@ -10,6 +15,12 @@
 [ ] Consider Input handling?
   [ ] Queues
   [ ] HTTP
+[ ] Tooling
+  [ ] Tracing
+  [ ] Logging
+  [ ] Execution Funnels
+  [ ] Aggregated Statistics
 [ ] Explore
   [ ] Cross-Compile
   [ ] ClojureScript / Frontend Web
+	[ ]  How does this work with UIs?
