@@ -87,8 +87,8 @@
                     :wait_for              :execution/wait-for
                     :return_target         :execution/return-target
                     :comment               :execution/comment
-                    :event_name            :event/name
-                    :event_data            :event/data
+                    :event_name            :execution/event-name
+                    :event_data            :execution/event-data
                     :dispatch_result       :execution/dispatch-result
                     :dispatch_by_input     :execution/dispatch-by-input
                     :end_state             :execution/end-state}]
@@ -100,7 +100,7 @@
      (map #(update % :execution/error nippy/fast-thaw))
      (map #(update % :execution/wait-for nippy/fast-thaw))
      (map #(update % :execution/return-target nippy/fast-thaw))
-     (map #(update % :event/data nippy/fast-thaw))
+     (map #(update % :execution/event-data nippy/fast-thaw))
      (map #(update % :execution/dispatch-result nippy/fast-thaw))
      (map #(update % :execution/dispatch-by-input nippy/fast-thaw)))))
 
@@ -207,8 +207,8 @@
                                 (nippy/fast-freeze (:execution/wait-for execution))
                                 (nippy/fast-freeze (:execution/return-target execution))
                                 (:execution/comment execution)
-                                (:event/name execution)
-                                (nippy/fast-freeze (:event/data execution))
+                                (:execution/event-name execution)
+                                (nippy/fast-freeze (:execution/event-data execution))
                                 (nippy/fast-freeze (:execution/dispatch-result execution))
                                 (nippy/fast-freeze (:execution/dispatch-by-input execution))
                                 (:execution/end-state execution)])
@@ -401,13 +401,13 @@
    (sort-by
     (juxt :t)
     (map (fn [sm]
-           (merge {:event/name ""}
+           (merge {:execution/event-name ""}
                   (select-keys (assoc sm :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
                                              (:execution/version sm)])
                                [:execution/state-machine-id
                                 :execution/state
                                 :execution/status
-                                :event/name
+                                :execution/event-name
                                 :execution/comment
                                 :execution/input
                                 :t

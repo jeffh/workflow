@@ -59,7 +59,7 @@
      ]
    (keys eval-bindings)))
 
-(defn eval-action [edn-expr state input output]
+(defn eval-action [edn-expr io state input output]
   (letfn [(const-state [form]
             (cond (map? form)        (if-let [state (:state form)]
                                        {:failed? (not (string? state))
@@ -72,7 +72,7 @@
       (assert (not failed?)
               (format ":state field must be a constant value and not dynamically computed: %s" (pr-str value)))))
   (if (fn? edn-expr)
-    (edn-expr (merge {:io    wf/io
+    (edn-expr (merge {:io    io
                       :state state
                       :input input}
                      (when (not= ::p/nothing output)
@@ -86,7 +86,7 @@
                         :namespaces  {}
                         :load-fn     (constantly nil)
                         :bindings    (merge eval-bindings
-                                            {'io    wf/io
+                                            {'io    io
                                              'state state
                                              'input input}
                                             (when (not= ::p/nothing output)
@@ -94,9 +94,9 @@
       (catch Exception e
         (throw (ex-info "Failed to interpret action" {:code edn-expr} e))))))
 
-(defn clj-eval-action [edn-expr state input output]
+(defn clj-eval-action [edn-expr io state input output]
   (try
-    (eval `(let [~'io    ~wf/io
+    (eval `(let [~'io    ~io
                  ~'state ~state
                  ~'input ~input]
              ~(if (= ::p/nothing output)
@@ -108,8 +108,8 @@
 
 (defrecord Sandboxed []
   p/MachineInterpreter
-  (evaluate-expr [_ expr state input output] (eval-action expr state input output)))
+  (evaluate-expr [_ expr state input output] (eval-action expr io state input output)))
 
 (defrecord Naive []
   p/MachineInterpreter
-  (evaluate-expr [_ expr state input output] (clj-eval-action expr state input output)))
+  (evaluate-expr [_ expr state input output] (clj-eval-action expr io state input output)))

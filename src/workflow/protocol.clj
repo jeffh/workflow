@@ -20,7 +20,7 @@
 (defn close [obj] (if (satisfies? Connection obj) (close* obj) obj))
 
 (defprotocol MachineInterpreter
-  (evaluate-expr [_ expr state input output]
+  (evaluate-expr [_ expr io state input output]
     "Evaluates an expression and returns an action map for workflow to process.
 
      output := ::nothing if there is no output value."))
@@ -49,7 +49,7 @@
     "Returns a sequence of the full history of an execution, ordered by execution history (creation is first)")
   (save-execution [_ execution]
     "Saves a new version of an execution.
-	 Returns a future of {:ok bool, :entity {saved-execution...}}"))
+     Returns a future of {:ok bool, :entity {saved-execution...}}"))
 
 ;; Optional protocol that some schedulers may use to outsource their ability to schedule task in the future
 (defprotocol SchedulerPersistence
@@ -120,5 +120,5 @@
   (evaluate-expr [_ expr state input output] (evaluate-expr interp expr state input output)))
 
 (defn eval-action
-  ([expr fx state input] (evaluate-expr fx expr state input ::nothing))
-  ([expr fx state input output] (evaluate-expr fx expr state input output)))
+  ([expr fx io state input] (evaluate-expr fx expr io state input ::nothing))
+  ([expr fx io state input output] (evaluate-expr fx expr io state input output)))

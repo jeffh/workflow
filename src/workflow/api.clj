@@ -1,7 +1,7 @@
 (ns workflow.api
-  (:require [workflow.protocol :refer [save-execution sleep sleep-to enqueue-execution
-                                           executor eval-action] :as protocol]
-			;; for multimethod implementations
+  (:require [workflow.protocol :refer [sleep sleep-to enqueue-execution executor eval-action] :as protocol]
+            [workflow.schema :as s]
+            ;; for multimethod implementations
             workflow.io.http)
   (:import java.util.UUID
            java.util.concurrent.CompletableFuture
@@ -19,11 +19,28 @@
 (def ^:private sync-timeout 30000)
 (def ^:private async-step-timeout 30000)
 
+(def open protocol/open)
+(def close protocol/close)
 (def fetch-statem protocol/fetch-statem)
 (def fetch-execution protocol/fetch-execution)
 (def fetch-execution-history protocol/fetch-execution-history)
 (def executions-for-statem protocol/executions-for-statem)
-(def save-statem protocol/save-statem)
+
+(defn save-statem [persistence statem]
+  (let [errs (s/err-for-statem statem)]
+    (if errs
+      (future {:ok    false
+               :error errs})
+      (protocol/save-statem persistence statem))))
+
+;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
+(defn- save-execution [persistence execution]
+  (let [errs (s/err-for-execution execution)]
+    (if errs
+      (future {:ok    false
+               :error errs})
+      (protocol/save-execution persistence execution))))
+
 (defn io-ops [] (keys (methods protocol/io)))
 
 (defn effects [{:keys [statem execution scheduler interpreter]}]
@@ -35,8 +52,6 @@
               (:execution/state e)))
   e)
 
-#_(io "http.request.json" :GET "https://httpbin.org/get" nil)
-
 ;; QUESTION(jeff): is this better to put in the protocols?
 (defn io
   "Processes external io events. Also takes in consideration the any state machine overrides."
@@ -45,6 +60,9 @@
     (if (fn? op)
       (apply op args)
       (apply protocol/io op args))))
+(defn- no-io
+  [op & args]
+  (throw (ex-info "io is not allowed in this location" {:op op :args args})))
 
 (declare run-sync-execution step-execution)
 (defn start
@@ -52,14 +70,15 @@
   ([fx state-machine-id input] (start fx state-machine-id (UUID/randomUUID) nil input))
   ([fx state-machine-id initial-state input] (start fx state-machine-id (UUID/randomUUID) initial-state input))
   ([fx state-machine-id execution-id initial-state input]
-   (if-let [state-machine (if (vector? state-machine-id)
-                            (fetch-statem fx (first state-machine-id) (second state-machine-id))
-                            (fetch-statem fx state-machine-id :latest))]
+   (if-let [state-machine (s/debug-assert-statem
+                           (if (vector? state-machine-id)
+                             (fetch-statem fx (first state-machine-id) (second state-machine-id))
+                             (fetch-statem fx state-machine-id :latest)))]
      (let [now                   (now!)
            sync?                 (= "sync" (:state-machine/execution-mode state-machine))
            execution             {:execution/comment               (if sync? "Immediately starting execution" "Enqueued for execution")
-                                  :event/name                      nil
-                                  :event/data                      nil
+                                  :execution/event-name            nil
+                                  :execution/event-data            nil
                                   :execution/id                    execution-id
                                   :execution/version               1
                                   :execution/state-machine-id      (:state-machine/id state-machine)
@@ -67,12 +86,12 @@
                                   :execution/mode                  (:state-machine/execution-mode state-machine)
                                   :execution/status                (if sync? "running" "queued")
                                   :execution/state                 (:state-machine/start-at state-machine)
-                                  :execution/memory                  (if (nil? initial-state)
-                                                                       (eval-action (:state-machine/context state-machine)
-                                                                                    fx
-                                                                                    nil
-                                                                                    input)
-                                                                       initial-state)
+                                  :execution/memory                (if (nil? initial-state)
+                                                                     (eval-action (:state-machine/context state-machine)
+                                                                                  fx
+                                                                                  nil
+                                                                                  input)
+                                                                     initial-state)
                                   :execution/input                 input
                                   :execution/enqueued-at           now
                                   :execution/started-at            (when sync? now)
@@ -87,14 +106,14 @@
                                   :execution/wait-for              nil
                                   :execution/return-data           nil
                                   :execution/end-state             nil}
-           {:keys [begin error]} (executor (:execution/mode execution))]
+           {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
        (if error
          [false nil {:error error}]
          (begin fx state-machine execution input)))
      [false nil {:error ::state-machine-not-found}])))
 
 (defn trigger [fx execution-id input]
-  (if-let [execution (fetch-execution fx execution-id :latest)]
+  (if-let [execution (s/debug-assert-execution (fetch-execution fx execution-id :latest))]
     (enqueue-execution fx execution input)
     {:error ::execution-not-found}))
 
@@ -115,11 +134,11 @@
 (defn- acquire-execution [fx executor-name execution input]
   (let [now (now!)]
     (save-execution fx (merge execution {:execution/version         (inc (:execution/version execution))
-                                         :execution/comment              (format "Resuming execution (%s) on %s"
-                                                                                 (:execution/state execution)
-                                                                                 executor-name)
-                                         :event/data                nil
-                                         :event/name                nil
+                                         :execution/comment         (format "Resuming execution (%s) on %s"
+                                                                            (:execution/state execution)
+                                                                            executor-name)
+                                         :execution/event-data      nil
+                                         :execution/event-name      nil
                                          :execution/status          "running"
                                          :execution/started-at      (or (:execution/started-at execution) now)
                                          :execution/error           nil
@@ -224,8 +243,8 @@
     (cond
       (:state-machine wait-for)
       {:execution/comment    "Paused step by invoking state-machine"
-       :event/name           (:name action)
-       :event/data           (:metadata action)
+       :execution/event-name           (:name action)
+       :execution/event-data           (:metadata action)
        :execution/version    (inc (:execution/version execution))
        :execution/memory       data
        :execution/status     "waiting"
@@ -235,8 +254,8 @@
 
       (:seconds wait-for)
       {:execution/comment    (str "Finished step by sleeping for " (:seconds wait-for) "s (" (:execution/state execution) " -> " (:state action) ")")
-       :event/name           (:name action)
-       :event/data           (:metadata action)
+       :execution/event-name           (:name action)
+       :execution/event-data           (:metadata action)
        :execution/version    (inc (:execution/version execution))
        :execution/state      (or (:state action) (:execution/state execution))
        :execution/memory       data
@@ -247,8 +266,8 @@
 
       (:timestamp wait-for)
       {:execution/comment    (str "Finished step by sleeping until timestamp (" (:execution/state execution) " -> " (:state action) ")")
-       :event/name           (:name action)
-       :event/data           (:metadata action)
+       :execution/event-name           (:name action)
+       :execution/event-data           (:metadata action)
        :execution/version    (inc (:execution/version execution))
        :execution/state      (or (:state action) (:execution/state execution))
        :execution/memory       data
@@ -259,8 +278,8 @@
 
       (:state action)
       (merge {:execution/comment    (str "Finished step (" (:execution/state execution) " -> " (:state action) ")")
-              :event/name           (:name action)
-              :event/data           (:metadata action)
+              :execution/event-name           (:name action)
+              :execution/event-data           (:metadata action)
               :execution/version    (inc (:execution/version execution))
               :execution/state      (or (:state action) (:execution/state execution))
               :execution/memory       data
@@ -286,18 +305,18 @@
 (defn- step-execution
   ([fx state-machine execution] (step-execution fx state-machine execution nil))
   ([fx state-machine execution input]
-   (let [estate      (:execution/state execution)
-         action-name (::action input)
-         node        (get (:state-machine/states state-machine)
+   (let [estate           (:execution/state execution)
+         action-name      (::action input)
+         node             (get (:state-machine/states state-machine)
                           estate)
-         cause       (::cause input)
-         resume      (:execution cause)
+         cause            (::cause input)
+         resume           (:execution cause)
          possible-actions (if resume
                             (remove nil? (conj (filter (comp #{action-name} :id) (:always node))
                                                (get (:actions node) action-name)))
                             (not-empty (remove nil? (into (:always node) [(get (:actions node) action-name)]))))
-         data (:execution/memory execution)
-         start-time  (now!)]
+         data             (:execution/memory execution)
+         start-time       (now!)]
      (with-effects fx state-machine execution
        (if node
          (if (:end node)
@@ -305,12 +324,12 @@
              (merge {:execution/comment     (str "Finished execution (" (:execution/state execution) ")"
                                                  (when (:execution/return-target execution)
                                                    " with return value"))
-                     :event/name            "exited"
+                     :execution/event-name  "exited"
                      :execution/version     (inc (:execution/version execution))
                      :execution/state       nil
                      :execution/end-state   (:execution/state execution)
                      :execution/status      "finished"
-                     :execution/return-data (when (:return node) (eval-action (:return node) fx data input))
+                     :execution/return-data (when (:return node) (eval-action (:return node) fx no-io data input))
                      :execution/wait-for    nil
                      :execution/user-start  start-time
                      :execution/user-end    now
@@ -320,7 +339,7 @@
              (try
                (loop [possible-actions possible-actions]
                  (if-let [possible-action (first possible-actions)]
-                   (if (and (not resume) (:when possible-action) (not (eval-action (:when possible-action) fx data input)))
+                   (if (and (not resume) (:when possible-action) (not (eval-action (:when possible-action) fx no-io data input)))
                      (recur (rest possible-actions))
                      (let [action (cond
                                     (:invoke possible-action)
@@ -336,18 +355,21 @@
                                                            (:success invoke)
                                                            (:error invoke))]
                                           (cond-> choice
-                                            (:context choice) (update :context eval-action fx data (:execution/dispatch-by-input execution) input)))
+                                            (:context choice) (update :context eval-action fx no-io data (:execution/dispatch-by-input execution) input)))
 
                                         (:state-machine invoke)
                                         (merge {:wait-for (merge (select-keys invoke [:state-machine :success :error])
-                                                                 (when (:input invoke) {:input (eval-action (:input invoke) fx data input)}))
+                                                                 (when (:input invoke) {:input (eval-action (:input invoke) fx no-io data input)}))
                                                 :state    (:execution/state execution)}
                                                (when (:name invoke) {:name (:name invoke)}))
 
                                         (:given invoke)
-                                        (let [output    (eval-action (:given invoke) fx data input)
+                                        (let [output    (try
+                                                          (eval-action (:given invoke) fx io data input)
+                                                          (catch Throwable t
+                                                            {:error t}))
                                               condition (if (:if invoke)
-                                                          (eval-action (:if invoke) fx data input output)
+                                                          (eval-action (:if invoke) fx no-io data input output)
                                                           true)]
                                           (eval-action (if condition (:then invoke) (:else invoke))
                                                        fx data input output))
@@ -357,7 +379,7 @@
 
                                     :else
                                     (cond-> possible-action
-                                      (:context possible-action) (update :context eval-action fx data input)))
+                                      (:context possible-action) (update :context eval-action fx no-io data input)))
                            action (update action :name #(or % action-name))
 
                            new-execution (apply-action start-time execution (merge {:context (:execution/memory execution)} action))]
@@ -376,8 +398,8 @@
                                                                  (merge (:input wait-for)
                                                                         {::return [(:execution/id execution) aid]}))]
                                      (assert aid "Action needs a name or id")
-                                     {:execution/dispatch-result e-result
-                                      :execution/dispatch-by-input  input})
+                                     {:execution/dispatch-result   e-result
+                                      :execution/dispatch-by-input input})
 
                                    (:seconds wait-for)
                                    (do (sleep fx (* 1000 (:seconds wait-for)) (:execution/id execution)
@@ -396,19 +418,19 @@
                                                         (:input action)))
                                        nil)))
                                new-execution))))
-                   {:execution/comment "No available actions"
-                    :event/name        "Input Error"
-                    :execution/status  "failed-resumable"
-                    :execution/version (inc (:execution/version execution))
-                    :execution/error   {:error            "cannot find action in state machine"
-                                        :state            estate
-                                        :input-action     action-name
-                                        :possible-actions possible-actions
-                                        :node             node}}))
+                   {:execution/comment    "No available actions"
+                    :execution/event-name "Input Error"
+                    :execution/status     "failed-resumable"
+                    :execution/version    (inc (:execution/version execution))
+                    :execution/error      {:error            "cannot find action in state machine"
+                                           :state            estate
+                                           :input-action     action-name
+                                           :possible-actions possible-actions
+                                           :node             node}}))
                (catch Throwable t
                  (let [now (now!)]
-                   {:execution/comment          "Failed step with exception"
-                    :event/name            "Error"
+                   {:execution/comment     "Failed step with exception"
+                    :execution/event-name  "Error"
                     :execution/version     (inc (:execution/version execution))
                     :execution/error       (Throwable->map t)
                     :execution/status      "failed"
@@ -417,17 +439,17 @@
                     :execution/user-end    now
                     :execution/failed-at   now
                     :execution/finished-at now})))
-             {:execution/comment "No available actions"
-              :event/name        "Input Error"
-              :execution/status  "failed-resumable"
-              :execution/version (inc (:execution/version execution))
-              :execution/error   {:error            "cannot find action in state machine"
-                                  :state            estate
-                                  :input-action     action-name
-                                  :possible-actions (keys (:actions node))}}))
+             {:execution/comment    "No available actions"
+              :execution/event-name "Input Error"
+              :execution/status     "failed-resumable"
+              :execution/version    (inc (:execution/version execution))
+              :execution/error      {:error            "cannot find action in state machine"
+                                     :state            estate
+                                     :input-action     action-name
+                                     :possible-actions (keys (:actions node))}}))
          (let [now (now!)]
            {:execution/comment     "Invalid state"
-            :event/name            "Internal Error"
+            :execution/event-name  "Internal Error"
             :execution/version     (inc (:execution/version execution))
             :execution/error       (Throwable->map (ex-info "Unrecognized state"
                                                             {:state           estate

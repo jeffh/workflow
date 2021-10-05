@@ -2,7 +2,7 @@
   :description "Data programs"
   :url "https://github.com/jeffh/workflow"
   :license {:name "EPL-2.0 WITH Classpath-exception-2.0"
-            :url "https://www.eclipse.org/legal/epl-2.0/"}
+            :url  "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [[org.clojure/clojure "1.10.1"]
                  [org.clojure/core.async "1.3.618"]
                  [borkdude/sci "0.2.6"]
@@ -12,6 +12,10 @@
                  [com.taoensso/nippy "3.1.1"]
                  [com.github.seancorfield/next.jdbc "1.2.724"]
                  [com.zaxxer/HikariCP "5.0.0"]
-                 [org.postgresql/postgresql "42.2.24"]]
+                 [org.postgresql/postgresql "42.2.24"]
+                 [metosin/malli "0.6.2"]]
   :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
-  :repl-options {:init-ns workflow.api})
+  :repl-options {:init-ns workflow.api}
+  :profiles {:dev {:dependencies [[diff-eq "0.2.3"]]
+                   :injections   [(require 'diff-eq.core)
+                                  (diff-eq.core/diff!)]}})

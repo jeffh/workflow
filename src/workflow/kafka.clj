@@ -218,12 +218,12 @@
      (sort-by
       (juxt :t)
       (map (fn [sm]
-             (merge {:event/name ""}
+             (merge {:execution/event-name ""}
                     (select-keys (assoc sm :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
                                                (:execution/version sm)])
                                  [:execution/state-machine-id
                                   :execution/state
-                                  :event/name
+                                  :execution/event-name
                                   :execution/comment
                                   :execution/input
                                   :t

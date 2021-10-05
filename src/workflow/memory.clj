@@ -7,22 +7,31 @@
            java.util.Date
            java.util.UUID))
 
+(defn- assoc-in-if
+  ([m keypath value] (assoc-in-if m keypath (complement boolean) value))
+  ([m keypath pred value]
+   (if (pred (get-in m keypath))
+     (assoc-in m keypath value)
+     m)))
+
 (defrecord StateMachinePersistence [state]
   p/StateMachinePersistence
   (fetch-statem [_ state-machine-id version]
     (let [s       @state
           version (if (= version :latest)
-                    (apply max 1 (keys (get s [state-machine-id])))
+                    (apply max 1 (keys (get s state-machine-id)))
                     version)]
       (get-in s [state-machine-id version])))
   (save-statem [_ state-machine]
-    (assert (:state-machine/id state-machine))
-    (assert (:state-machine/version state-machine))
-    (future {:ok     true
-             :entity (get-in (swap! state assoc-in [(:state-machine/id state-machine)
+               (let [{:state-machine/keys [id version]} state-machine]
+                 (future (if (and id version (integer? version))
+                           {:ok     true
+                            :entity (get-in (swap! state assoc-in-if
+                                                   [(:state-machine/id state-machine)
                                                     (:state-machine/version state-machine)]
-                                    state-machine)
-                             [(:state-machine/id state-machine) (:state-machine/version state-machine)])})))
+                                                   state-machine)
+                                            [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
+                           {:ok false})))))
 
 (defn make-statem-persistence []
   (->StateMachinePersistence (atom {})))
@@ -360,13 +369,13 @@
    (sort-by
     (juxt :t)
     (map (fn [sm]
-           (merge {:event/name ""}
+           (merge {:execution/event-name ""}
                   (select-keys (assoc sm :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
                                              (:execution/version sm)])
                                [:execution/state-machine-id
                                 :execution/state
                                 :execution/status
-                                :event/name
+                                :execution/event-name
                                 :execution/comment
                                 :execution/input
                                 :t
