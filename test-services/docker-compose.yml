@@ -8,7 +8,10 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: workflow
+    volumes:
+      - type: bind
+        source: ./sql/pg/
+        target: /docker-entrypoint-initdb.d
   zoo1:
     image: zookeeper:3.4.9
     hostname: zoo1
