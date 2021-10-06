@@ -40,7 +40,7 @@
   ;;  - execution-id+version should always be unique, immutable, & accumulative
   ;;  - execution-id is always a UUID
   (executions-for-statem [_ state-machine-id options]
-    "Fetches executions by a given state machine. Ordered by latest executions started-at.
+    "Returns a sequence of executions by a given state machine. Ordered by latest executions started-at.
 
 		options - {:limit int, :offset int, :version #{:latest, int, :all}}")
   (fetch-execution [_ execution-id version]
@@ -117,7 +117,7 @@
   (enqueue-execution [_ execution options] (enqueue-execution scheduler execution options))
   (register-execution-handler [_ f] (register-execution-handler scheduler f))
   MachineInterpreter
-  (evaluate-expr [_ expr state input output] (evaluate-expr interp expr state input output)))
+  (evaluate-expr [_ expr io state input output] (evaluate-expr interp expr io state input output)))
 
 (defn eval-action
   ([expr fx io state input] (evaluate-expr fx expr io state input ::nothing))

@@ -69,13 +69,13 @@
             (api/close persistence)))))))
 
 
-(declare execution-started)
+(declare execution-started execution-step execution2-started)
 (defn execution-persistence [doc-name creator]
   (testing doc-name
     (testing "conforms to execution persistence"
       (let [persistence (api/open (creator))]
         (try
-          (testing "[happy path]"
+          (testing "[happy path - 1 execution; 1 step]"
             (testing "save-execution returns a future that saves the execution"
               (let [r (protocol/save-execution persistence execution-started)]
                 (is (future? r) "save-execution should return a future")
@@ -85,7 +85,55 @@
               (is (= execution-started (api/fetch-execution persistence
                                                             (:execution/id execution-started)
                                                             (:execution/version execution-started)))
-                  "persistence should return what was stored")))
+                  "persistence should return what was stored"))
+            (testing "fetch-execution-history returns a seq of executions"
+              (is (= (seq [execution-started]) (api/fetch-execution-history persistence (:execution/id execution-started)))
+                  "persistence should return a single execution-started"))
+            (testing "executions-for-statem returns a seq of executions for a given statem"
+              (is (= (seq [execution-started]) (api/executions-for-statem persistence
+                                                                          (:execution/state-machine-id execution-started)
+                                                                          {:version (:execution/state-machine-version execution-started)}))
+                  "persistence should return a single execution when fetching by state machine")))
+          (testing "[happy path - 1 execution; 2 steps]"
+            (testing "save-execution returns a future that saves the execution"
+              (let [r (protocol/save-execution persistence execution-step)]
+                (is (future? r) "save-execution should return a future")
+                (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
+                (is (= execution-step (:entity (deref r 1000 :timeout))))))
+            (testing "fetch-execution returns the execution of the specific version"
+              (is (= execution-step (api/fetch-execution persistence
+                                                            (:execution/id execution-step)
+                                                            (:execution/version execution-step)))
+                  "persistence should return what was stored"))
+            (testing "fetch-execution-history returns a history seq of executions, ordered by latest last"
+              (is (= (seq [execution-started execution-step]) (api/fetch-execution-history persistence (:execution/id execution-step)))
+                  "persistence should return a single execution-started"))
+            (testing "executions-for-statem returns a seq of executions for a given statem, ordered by latest started-at"
+              (is (= (seq [execution-step]) (api/executions-for-statem persistence
+                                                                       (:execution/state-machine-id execution-step)
+                                                                       {:version (:execution/state-machine-version execution-step)}))
+                  "persistence should return a single execution when fetching by state machine")))
+          (testing "[happy path - 2 executions; 2 steps, 1 step]"
+            (testing "save-execution returns a future that saves the execution"
+              (let [r (protocol/save-execution persistence execution2-started)]
+                (is (future? r) "save-execution should return a future")
+                (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
+                (is (= execution2-started (:entity (deref r 1000 :timeout))))))
+            (testing "fetch-execution returns the execution of the specific version"
+              (is (= execution2-started (api/fetch-execution persistence
+                                                             (:execution/id execution2-started)
+                                                             (:execution/version execution2-started)))
+                  "persistence should return what was stored"))
+            (testing "fetch-execution-history returns a history seq of executions, ordered by latest last"
+              (is (= (seq [execution-started execution-step]) (api/fetch-execution-history persistence (:execution/id execution-started)))
+                  "persistence should return a two execution historical values for execution1")
+              (is (= (seq [execution2-started]) (api/fetch-execution-history persistence (:execution/id execution2-started)))
+                  "persistence should return a one execution historical value for execution2"))
+            (testing "executions-for-statem returns a seq of executions for a given statem, ordered by latest started-at"
+              (is (= (seq [execution2-started execution-step]) (api/executions-for-statem persistence
+                                                                                          (:execution/state-machine-id execution-step)
+                                                                                          {:version (:execution/state-machine-version execution-step)}))
+                  "persistence should return 2 executions when fetching by state machine")))
           (finally
             (api/close persistence)))))))
 
@@ -102,7 +150,7 @@
               :state                 "create"
               :memory                {:order {:id "R4523"}}
               :input                 nil
-              :enqueued-at           #inst "2021-10-04T09:06:32.203-00:00"
+              :enqueued-at           (System/nanoTime)
               :started-at            nil
               :finished-at           nil
               :failed-at             nil
@@ -114,7 +162,44 @@
               :return-target         nil
               :wait-for              nil
               :return-data           nil
-              :end-state             nil})
+              :end-state             nil
+              :dispatch-result       nil
+              :dispatch-by-input     nil})
+
+(def ^:private execution2-started
+  (assoc execution-started
+         :execution/id #uuid "7545E6ED-7151-4E0B-B60D-1972AE614D97"
+         :execution/memory {:order {:id "R5232"}}
+         :execution/enqueued-at (System/nanoTime)))
+
+(def ^:private execution-step
+  #:execution{:comment               "Resuming execution (create) on :example"
+              :event-name            nil
+              :event-data            nil
+              :id                    #uuid "3DB0A06E-7F9C-445A-B327-CE9B4EEC9E53"
+              :version               2
+              :state-machine-id      "order"
+              :state-machine-version 1
+              :mode                  "async-throughput"
+              :status                "running"
+              :state                 "create"
+              :memory                {:order {:id "R4523"}}
+              :input                 nil
+              :enqueued-at           (System/nanoTime)
+              :started-at            nil
+              :finished-at           nil
+              :failed-at             nil
+              :step-started-at       (+ 10 (System/nanoTime))
+              :step-ended-at         nil
+              :user-started-at       nil
+              :user-ended-at         nil
+              :error                 nil
+              :return-target         nil
+              :wait-for              nil
+              :return-data           nil
+              :end-state             nil
+              :dispatch-result       nil
+              :dispatch-by-input     nil})
 
 (def ^:private order-statem
   #:state-machine{:id             "order"

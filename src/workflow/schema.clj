@@ -8,26 +8,33 @@
   [:or string? keyword? integer?])
 
 (def Transition
-  [:schema {:registry {::transition [:map
-                                     [:name {:optional true} string?]
-                                     [:id {:optional true} string?]
-                                     [:state {:optional true} State]
-                                     [:when {:optional true} Code]
-                                     [:wait-for {:optional true}
-                                      [:map [:seconds integer?]]]
-                                     [:context {:optional true} Code]
-                                     [:invoke {:optional true}
-                                      [:or
-                                       [:map
-                                        [:state-machine [:tuple string? integer?]]
-                                        [:input {:optional true} Code]
-                                        [:success [:ref ::transition]]
-                                        [:error [:ref ::transition]]]
-                                       [:map
-                                        [:given Code]
-                                        [:if Code]
-                                        [:then [:ref ::transition]]
-                                        [:else [:ref ::transition]]]]]]}}
+  [:schema {:registry {::transition [:or
+                                     [:map
+                                      [:state State]
+                                      [:name {:optional true} string?]
+                                      [:when {:optional true} Code]
+                                      [:wait-for {:optional true}
+                                       [:map [:seconds integer?]]]
+                                      [:context {:optional true} Code]]
+                                     [:map
+                                      [:id string?]
+                                      [:name {:optional true} string?]
+                                      [:when {:optional true} Code]
+                                      [:wait-for {:optional true}
+                                       [:map [:seconds integer?]]]
+                                      [:context {:optional true} Code]
+                                      [:invoke
+                                       [:or
+                                        [:map
+                                         [:state-machine [:tuple string? integer?]]
+                                         [:input {:optional true} Code]
+                                         [:success [:ref ::transition]]
+                                         [:error [:ref ::transition]]]
+                                        [:map
+                                         [:given Code]
+                                         [:if Code]
+                                         [:then [:ref ::transition]]
+                                         [:else [:ref ::transition]]]]]]]}}
    ::transition])
 
 (def StateMachine
@@ -36,15 +43,15 @@
    [:state-machine/version integer?]
    [:state-machine/execution-mode string?]
    [:state-machine/context Code]
-   [:state-machine/states
-    [:map-of
-     State
-     [:map
-      [:always {:optional true} [:vector Transition]]
-      [:actions {:optional true} [:map-of any? Transition]]
-      [:end {:optional true} boolean?]
-      [:return {:optional true} Code]]]]])
+   [:state-machine/states [:map-of
+                           State
+                           [:map
+                            [:always {:optional true} [:vector Transition]]
+                            [:actions {:optional true} [:map-of any? Transition]]
+                            [:end {:optional true} boolean?]
+                            [:return {:optional true} Code]]]]])
 
+(def Time pos-int?)
 
 (def Execution
   [:map
@@ -60,19 +67,21 @@
    [:execution/state State]
    [:execution/memory any?]
    [:execution/input any?]
-   [:execution/enqueued-at [:maybe inst?]]
-   [:execution/started-at [:maybe inst?]]
-   [:execution/finished-at [:maybe inst?]]
-   [:execution/failed-at [:maybe inst?]]
-   [:execution/step-started-at [:maybe inst?]]
-   [:execution/step-ended-at [:maybe inst?]]
-   [:execution/user-started-at [:maybe inst?]]
-   [:execution/user-ended-at [:maybe inst?]]
+   [:execution/enqueued-at [:maybe Time]]
+   [:execution/started-at [:maybe Time]]
+   [:execution/finished-at [:maybe Time]]
+   [:execution/failed-at [:maybe Time]]
+   [:execution/step-started-at [:maybe Time]]
+   [:execution/step-ended-at [:maybe Time]]
+   [:execution/user-started-at [:maybe Time]]
+   [:execution/user-ended-at [:maybe Time]]
    [:execution/error [:maybe any?]]
    [:execution/return-target [:maybe any?]]
    [:execution/wait-for [:maybe any?]]
    [:execution/return-data [:maybe any?]]
-   [:execution/end-state [:maybe State]]])
+   [:execution/end-state [:maybe State]]
+   [:execution/dispatch-by-input [:maybe any?]]
+   [:execution/dispatch-result [:maybe any?]]])
 
 
 ;;; "Soft" interface boundary: incase we want to replace the validation library
@@ -106,9 +115,9 @@
 
 ;;;;;;;;;;
 
-(def *debug* true)
+(def ^:private debug true)
 
 (defn debug-assert-execution [e]
-  (when *debug* (assert-execution e)))
+  (when debug (assert-execution e)))
 (defn debug-assert-statem [s]
-  (when *debug* (assert-statem s)))
+  (when debug (assert-statem s)))

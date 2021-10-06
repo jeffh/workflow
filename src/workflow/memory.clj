@@ -47,11 +47,14 @@
       (cond->>
        (reverse (sort-by
                  :execution/started-at
-                 (cond
-                   (= -1 version) nil
-                   (= :all version) (mapcat vals (vals s))
-                   (integer? version) (filter (comp #{version} :execution/state-machine-version)
-                                              (mapcat vals (vals s))))))
+                 (map last
+                      (vals
+                       (group-by :execution/id
+                                 (cond
+                                   (= -1 version) nil
+                                   (= :all version) (mapcat vals (vals s))
+                                   (integer? version) (filter (comp #{version} :execution/state-machine-version)
+                                                              (mapcat vals (vals s)))))))))
         offset (drop offset)
         limit (take limit))))
   (fetch-execution [_ execution-id version]
@@ -63,7 +66,7 @@
   (fetch-execution-history [_ execution-id]
     (let [s     @state
           execs (vals (get-in s [execution-id]))]
-      (sort-by execs :version)))
+      (sort-by :execution/version execs)))
   (save-execution [_ execution]
     (assert (:execution/id execution))
     (assert (:execution/version execution))

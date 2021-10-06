@@ -21,10 +21,14 @@
 
 (def open protocol/open)
 (def close protocol/close)
-(def fetch-statem protocol/fetch-statem)
-(def fetch-execution protocol/fetch-execution)
-(def fetch-execution-history protocol/fetch-execution-history)
-(def executions-for-statem protocol/executions-for-statem)
+(defn fetch-statem [persistence statem-id statem-version]
+  (s/debug-assert-statem (protocol/fetch-statem persistence statem-id statem-version)))
+(defn fetch-execution [persistence execution-id execution-version]
+  (s/debug-assert-execution (protocol/fetch-execution persistence execution-id execution-version)))
+(defn fetch-execution-history [persistence execution-id]
+  (map s/debug-assert-execution (protocol/fetch-execution-history persistence execution-id)))
+(defn executions-for-statem [persistence state-machine-id options]
+  (map s/debug-assert-execution (protocol/executions-for-statem persistence state-machine-id options)))
 
 (defn save-statem [persistence statem]
   (let [errs (s/err-for-statem statem)]
@@ -99,8 +103,8 @@
                                   :execution/failed-at             nil
                                   :execution/step-started-at       (when sync? now)
                                   :execution/step-ended-at         nil
-                                  :execution/user-start            nil
-                                  :execution/user-end              nil
+                                  :execution/user-started-at       nil
+                                  :execution/user-ended-at         nil
                                   :execution/error                 nil
                                   :execution/return-target         (::return input)
                                   :execution/wait-for              nil
@@ -143,8 +147,8 @@
                                          :execution/started-at      (or (:execution/started-at execution) now)
                                          :execution/error           nil
                                          :execution/failed-at       nil
-                                         :execution/user-start      nil
-                                         :execution/user-end        nil
+                                         :execution/user-started-at nil
+                                         :execution/user-ended-at   nil
                                          :execution/step-started-at now
                                          :execution/step-ended-at   nil
                                          :execution/finished-at     nil
@@ -237,56 +241,56 @@
                         action)
         wait-for (:wait-for action)
         now      (now!)
-        data (merge (:execution/memory execution) (:context action))]
+        data     (merge (:execution/memory execution) (:context action))]
     #_(s/assert-serialization-size "state-machine state"
                                    (select-keys new-state [:context :state]))
     (cond
       (:state-machine wait-for)
-      {:execution/comment    "Paused step by invoking state-machine"
-       :execution/event-name           (:name action)
-       :execution/event-data           (:metadata action)
-       :execution/version    (inc (:execution/version execution))
-       :execution/memory       data
-       :execution/status     "waiting"
-       :execution/wait-for   wait-for
-       :execution/user-start start-time
-       :execution/user-end   now}
+      {:execution/comment         "Paused step by invoking state-machine"
+       :execution/event-name      (:name action)
+       :execution/event-data      (:metadata action)
+       :execution/version         (inc (:execution/version execution))
+       :execution/memory          data
+       :execution/status          "waiting"
+       :execution/wait-for        wait-for
+       :execution/user-started-at start-time
+       :execution/user-ended-at   now}
 
       (:seconds wait-for)
-      {:execution/comment    (str "Finished step by sleeping for " (:seconds wait-for) "s (" (:execution/state execution) " -> " (:state action) ")")
-       :execution/event-name           (:name action)
-       :execution/event-data           (:metadata action)
-       :execution/version    (inc (:execution/version execution))
-       :execution/state      (or (:state action) (:execution/state execution))
-       :execution/memory       data
-       :execution/status     "waiting"
-       :execution/wait-for   wait-for
-       :execution/user-start start-time
-       :execution/user-end   now}
+      {:execution/comment         (str "Finished step by sleeping for " (:seconds wait-for) "s (" (:execution/state execution) " -> " (:state action) ")")
+       :execution/event-name      (:name action)
+       :execution/event-data      (:metadata action)
+       :execution/version         (inc (:execution/version execution))
+       :execution/state           (or (:state action) (:execution/state execution))
+       :execution/memory          data
+       :execution/status          "waiting"
+       :execution/wait-for        wait-for
+       :execution/user-started-at start-time
+       :execution/user-ended-at   now}
 
       (:timestamp wait-for)
-      {:execution/comment    (str "Finished step by sleeping until timestamp (" (:execution/state execution) " -> " (:state action) ")")
-       :execution/event-name           (:name action)
-       :execution/event-data           (:metadata action)
-       :execution/version    (inc (:execution/version execution))
-       :execution/state      (or (:state action) (:execution/state execution))
-       :execution/memory       data
-       :execution/status     "waiting"
-       :execution/wait-for   wait-for
-       :execution/user-start start-time
-       :execution/user-end   now}
+      {:execution/comment         (str "Finished step by sleeping until timestamp (" (:execution/state execution) " -> " (:state action) ")")
+       :execution/event-name      (:name action)
+       :execution/event-data      (:metadata action)
+       :execution/version         (inc (:execution/version execution))
+       :execution/state           (or (:state action) (:execution/state execution))
+       :execution/memory          data
+       :execution/status          "waiting"
+       :execution/wait-for        wait-for
+       :execution/user-started-at start-time
+       :execution/user-ended-at   now}
 
       (:state action)
-      (merge {:execution/comment    (str "Finished step (" (:execution/state execution) " -> " (:state action) ")")
-              :execution/event-name           (:name action)
-              :execution/event-data           (:metadata action)
-              :execution/version    (inc (:execution/version execution))
-              :execution/state      (or (:state action) (:execution/state execution))
-              :execution/memory       data
-              :execution/status     "paused"
-              :execution/wait-for   nil
-              :execution/user-start start-time
-              :execution/user-end   now})
+      (merge {:execution/comment         (str "Finished step (" (:execution/state execution) " -> " (:state action) ")")
+              :execution/event-name      (:name action)
+              :execution/event-data      (:metadata action)
+              :execution/version         (inc (:execution/version execution))
+              :execution/state           (or (:state action) (:execution/state execution))
+              :execution/memory          data
+              :execution/status          "paused"
+              :execution/wait-for        nil
+              :execution/user-started-at start-time
+              :execution/user-ended-at   now})
 
       :else (throw (ex-info (format "state produced unknown action: %s" (pr-str (:state action)))
                             {:action            action
@@ -308,7 +312,7 @@
    (let [estate           (:execution/state execution)
          action-name      (::action input)
          node             (get (:state-machine/states state-machine)
-                          estate)
+                               estate)
          cause            (::cause input)
          resume           (:execution cause)
          possible-actions (if resume
@@ -321,19 +325,19 @@
        (if node
          (if (:end node)
            (let [now (now!)]
-             (merge {:execution/comment     (str "Finished execution (" (:execution/state execution) ")"
-                                                 (when (:execution/return-target execution)
-                                                   " with return value"))
-                     :execution/event-name  "exited"
-                     :execution/version     (inc (:execution/version execution))
-                     :execution/state       nil
-                     :execution/end-state   (:execution/state execution)
-                     :execution/status      "finished"
-                     :execution/return-data (when (:return node) (eval-action (:return node) fx no-io data input))
-                     :execution/wait-for    nil
-                     :execution/user-start  start-time
-                     :execution/user-end    now
-                     :execution/finished-at now}))
+             (merge {:execution/comment         (str "Finished execution (" (:execution/state execution) ")"
+                                                     (when (:execution/return-target execution)
+                                                       " with return value"))
+                     :execution/event-name      "exited"
+                     :execution/version         (inc (:execution/version execution))
+                     :execution/state           nil
+                     :execution/end-state       (:execution/state execution)
+                     :execution/status          "finished"
+                     :execution/return-data     (when (:return node) (eval-action (:return node) fx no-io data input))
+                     :execution/wait-for        nil
+                     :execution/user-started-at start-time
+                     :execution/user-ended-at   now
+                     :execution/finished-at     now}))
            (if possible-actions
              ;; TODO(jeff): support node catching exceptions/errors and routing them through a transition or state
              (try
@@ -429,16 +433,16 @@
                                            :node             node}}))
                (catch Throwable t
                  (let [now (now!)]
-                   {:execution/comment     "Failed step with exception"
-                    :execution/event-name  "Error"
-                    :execution/version     (inc (:execution/version execution))
-                    :execution/error       (Throwable->map t)
-                    :execution/status      "failed"
-                    :execution/wait-for    nil
-                    :execution/user-start  start-time
-                    :execution/user-end    now
-                    :execution/failed-at   now
-                    :execution/finished-at now})))
+                   {:execution/comment         "Failed step with exception"
+                    :execution/event-name      "Error"
+                    :execution/version         (inc (:execution/version execution))
+                    :execution/error           (Throwable->map t)
+                    :execution/status          "failed"
+                    :execution/wait-for        nil
+                    :execution/user-started-at start-time
+                    :execution/user-ended-at   now
+                    :execution/failed-at       now
+                    :execution/finished-at     now})))
              {:execution/comment    "No available actions"
               :execution/event-name "Input Error"
               :execution/status     "failed-resumable"
@@ -448,17 +452,17 @@
                                      :input-action     action-name
                                      :possible-actions (keys (:actions node))}}))
          (let [now (now!)]
-           {:execution/comment     "Invalid state"
-            :execution/event-name  "Internal Error"
-            :execution/version     (inc (:execution/version execution))
-            :execution/error       (Throwable->map (ex-info "Unrecognized state"
-                                                            {:state           estate
-                                                             :possible-states (set (keys (:state-machine/states state-machine)))}))
-            :execution/status      "failed"
-            :execution/user-start  start-time
-            :execution/user-end    now
-            :execution/finished-at now
-            :execution/failed-at   now}))))))
+           {:execution/comment         "Invalid state"
+            :execution/event-name      "Internal Error"
+            :execution/version         (inc (:execution/version execution))
+            :execution/error           (Throwable->map (ex-info "Unrecognized state"
+                                                                {:state           estate
+                                                                 :possible-states (set (keys (:state-machine/states state-machine)))}))
+            :execution/status          "failed"
+            :execution/user-started-at start-time
+            :execution/user-ended-at   now
+            :execution/finished-at     now
+            :execution/failed-at       now}))))))
 
 (defn- run-linear-execution
   "Runs an execution, saving its state into the database executions. Avoids

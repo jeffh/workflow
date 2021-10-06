@@ -235,11 +235,11 @@
                                            (- (:execution/step-ended-at sm)
                                               (:execution/step-started-at sm))
                                            1000000)))
-                     :user-duration-ms (when (and (:execution/user-start sm) (:execution/user-end sm))
+                     :user-duration-ms (when (and (:execution/user-started-at sm) (:execution/user-ended-at sm))
                                          (double
                                           (/
-                                           (- (:execution/user-end sm)
-                                              (:execution/user-start sm))
+                                           (- (:execution/user-ended-at sm)
+                                              (:execution/user-started-at sm))
                                            1000000)))}))
            (wf/executions-for-statem fx "order" {:version :latest}))))
 

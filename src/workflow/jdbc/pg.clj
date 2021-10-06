@@ -1,6 +1,6 @@
 (ns workflow.jdbc.pg
   (:require [workflow.protocol :as p]
-            [workflow :as wf]
+            [workflow.api :as wf]
             [taoensso.nippy :as nippy]
             [clojure.set :as set]
             [next.jdbc :as jdbc]
@@ -9,8 +9,36 @@
   (:import com.zaxxer.hikari.HikariDataSource
            java.util.concurrent.Executors))
 
+(defn- record
+  ([f ds parameterized-query]
+   (try
+     (f ds parameterized-query)
+     (catch org.postgresql.util.PSQLException pe
+       (let [msg (.getServerErrorMessage pe)]
+         (throw (ex-info "Failed to execute SQL"
+                         {:sql (first parameterized-query)
+                          :values (rest parameterized-query)
+                          :pg-sql-state-error (some-> msg (.getSQLState))}
+                         pe))))))
+  ([f ds parameterized-query options]
+   (try
+     (f ds parameterized-query options)
+     (catch org.postgresql.util.PSQLException pe
+       (let [msg (.getServerErrorMessage pe)]
+         (throw (ex-info "Failed to execute SQL"
+                         {:sql (first parameterized-query)
+                          :values (rest parameterized-query)
+                          :pg-sql-state-error (some-> msg (.getSQLState))}
+                         pe)))))))
+
+(defn drop-tables!
+  "Deletes all data. Please, I hope you know what you're doing."
+  [ds]
+  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_executions"])
+  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_statemachines"]))
+
 (defn- ensure-statem-table [ds]
-  (jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_statemachines (
+  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_statemachines (
     id TEXT NOT NULL,
     version BIGINT NOT NULL,
 	start_at TEXT NOT NULL,
@@ -21,7 +49,7 @@
   );"]))
 
 (defn- ensure-executions-table [ds]
-  (jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_executions (
+  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_executions (
     id UUID NOT NULL,
 	version BIGINT NOT NULL,
 	state_machine_id TEXT NOT NULL,
@@ -42,6 +70,7 @@
 	error BYTEA,
 	wait_for BYTEA,
 	return_target BYTEA,
+	return_data BYTEA,
 	comment TEXT,
 	event_name TEXT,
 	event_data BYTEA,
@@ -81,11 +110,12 @@
                     :failed_at             :execution/failed-at
                     :step_started_at       :execution/step-started-at
                     :step_ended_at         :execution/step-ended-at
-                    :user_started_at       :execution/user-start
-                    :user_ended_at         :execution/user-end
+                    :user_started_at       :execution/user-started-at
+                    :user_ended_at         :execution/user-ended-at
                     :error                 :execution/error
                     :wait_for              :execution/wait-for
                     :return_target         :execution/return-target
+                    :return_data           :execution/return-data
                     :comment               :execution/comment
                     :event_name            :execution/event-name
                     :event_data            :execution/event-data
@@ -100,23 +130,70 @@
      (map #(update % :execution/error nippy/fast-thaw))
      (map #(update % :execution/wait-for nippy/fast-thaw))
      (map #(update % :execution/return-target nippy/fast-thaw))
+     (map #(update % :execution/return-data nippy/fast-thaw))
      (map #(update % :execution/event-data nippy/fast-thaw))
      (map #(update % :execution/dispatch-result nippy/fast-thaw))
      (map #(update % :execution/dispatch-by-input nippy/fast-thaw)))))
 
 (defn- resolve-statem-version [conn state-machine-id version]
   (if (= :latest version)
-    (:version (jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_statemachines WHERE id = ?"
+    (:version (record jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_statemachines WHERE id = ?"
                                        state-machine-id]
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
 
 (defn- resolve-execution-version [conn execution-id version]
   (if (= :latest version)
-    (:version (jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_executions WHERE id = ?"
+    (:version (record jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_executions WHERE id = ?"
                                        execution-id]
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
+
+(defn- save-execution [ds execution]
+  (with-open [conn (jdbc/get-connection ds)]
+    (try
+      (record jdbc/execute! conn ["INSERT INTO workflow_executions (
+      id, version, state_machine_id, state_machine_version, mode, status, state, memory, input,
+      enqueued_at, started_at, finished_at, failed_at, step_started_at, step_ended_at,
+      user_started_at, user_ended_at, error, wait_for, return_target, return_data, comment, event_name, event_data,
+      dispatch_result, dispatch_by_input, end_state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                  (:execution/id execution)
+                                  (:execution/version execution)
+                                  (:execution/state-machine-id execution)
+                                  (:execution/state-machine-version execution)
+                                  (:execution/mode execution)
+                                  (:execution/status execution)
+                                  (:execution/state execution)
+                                  (nippy/fast-freeze (:execution/memory execution))
+                                  (nippy/fast-freeze (:execution/input execution))
+                                  (:execution/enqueued-at execution)
+                                  (:execution/started-at execution)
+                                  (:execution/finished-at execution)
+                                  (:execution/failed-at execution)
+                                  (:execution/step-started-at execution)
+                                  (:execution/step-ended-at execution)
+                                  (:execution/user-started-at execution)
+                                  (:execution/user-ended-at execution)
+                                  (nippy/fast-freeze (:execution/error execution))
+                                  (nippy/fast-freeze (:execution/wait-for execution))
+                                  (nippy/fast-freeze (:execution/return-target execution))
+                                  (nippy/fast-freeze (:execution/return-data execution))
+                                  (:execution/comment execution)
+                                  (:execution/event-name execution)
+                                  (nippy/fast-freeze (:execution/event-data execution))
+                                  (nippy/fast-freeze (:execution/dispatch-result execution))
+                                  (nippy/fast-freeze (:execution/dispatch-by-input execution))
+                                  (:execution/end-state execution)])
+      {:ok     true
+       :entity execution}
+      (catch org.postgresql.util.PSQLException pe
+        (let [expected-unique "23505"]
+          (if-let [msg (.getServerErrorMessage pe)]
+            (if (= expected-unique (.getSQLState msg))
+              {:ok false :error :version-conflict}
+              (throw pe))
+            (throw pe)))))))
 
 (defrecord Persistence [db-spec ^javax.sql.DataSource ds pool]
   p/Connection
@@ -142,13 +219,13 @@
      pool
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
-         (jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
-                              (:state-machine/id state-machine)
-                              (:state-machine/version state-machine)
-                              (:state-machine/start-at state-machine)
-                              (:state-machine/execution-mode state-machine)
-                              (nippy/fast-freeze (:state-machine/context state-machine))
-                              (nippy/fast-freeze (:state-machine/states state-machine))])
+         (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+                                     (:state-machine/id state-machine)
+                                     (:state-machine/version state-machine)
+                                     (:state-machine/start-at state-machine)
+                                     (:state-machine/execution-mode state-machine)
+                                     (nippy/fast-freeze (:state-machine/context state-machine))
+                                     (nippy/fast-freeze (:state-machine/states state-machine))])
          {:ok     true
           :entity state-machine}))))
   p/ExecutionPersistence
@@ -157,11 +234,32 @@
       (let [version (resolve-statem-version conn state-machine-id version)]
         (into []
               (db->execution-txfm)
-              (jdbc/plan conn
-                         (cond
-                           (and limit offset) ["SELECT * FROM workflow_executions WHERE state_machine_id = ? AND state_machine_version = ? ORDER BY started_at DESC LIMIT ? OFFSET ?;" state-machine-id version limit offset]
-                           limit ["SELECT * FROM workflow_executions WHERE state_machine_id = ? AND state_machine_version = ? ORDER BY started_at DESC LIMIT ?;" state-machine-id version limit]
-                           :else ["SELECT * FROM workflow_executions WHERE state_machine_id = ? AND state_machine_version = ? ORDER BY started_at DESC;" state-machine-id version]))))))
+              (jdbc/plan
+               conn
+               (cond
+                 limit ["SELECT e.* FROM workflow_executions e
+INNER JOIN (
+  SELECT id, MAX(version) as version FROM workflow_executions
+  WHERE state_machine_id = ? AND state_machine_version = ?
+  GROUP BY id
+) as e2
+ON e.id = e2.id AND e.version = e2.version
+WHERE e.state_machine_id = ? AND e.state_machine_version = ?
+ORDER BY e.started_at DESC LIMIT ? OFFSET ?;"
+                        state-machine-id version
+                        state-machine-id version
+                        limit (or offset 0)]
+                 :else ["SELECT e.* FROM workflow_executions e
+INNER JOIN (
+  SELECT id, MAX(version) as version FROM workflow_executions
+  WHERE state_machine_id = ? AND state_machine_version = ?
+  GROUP BY id
+) as e2
+ON e.id = e2.id AND e.version = e2.version
+WHERE e.state_machine_id = ? AND e.state_machine_version = ?
+ORDER BY e.started_at DESC;"
+                        state-machine-id version
+                        state-machine-id version]))))))
   (fetch-execution [_ execution-id version]
     (with-open [conn (jdbc/get-connection ds)]
       (let [version (resolve-execution-version conn execution-id version)]
@@ -173,59 +271,16 @@
     (with-open [conn (jdbc/get-connection ds)]
       (into []
             (db->execution-txfm)
-            (jdbc/plan conn ["SELECT * FROM workflow_executions WHERE id = ? ORDER BY version;" execution-id]))))
+            (jdbc/plan conn ["SELECT * FROM workflow_executions WHERE id = ? ORDER BY version ASC;" execution-id]))))
   (save-execution [_ execution]
-    (.submit
-     pool
-     (fn []
-       (with-open [conn (jdbc/get-connection ds)]
-         (try
-           (jdbc/execute! conn ["INSERT INTO workflow_executions (
-		  id, version, state_machine_id, state_machine_version, mode, status, state, memory, input,
-		  enqueued_at, started_at, finished_at, failed_at, step_started_at, step_ended_at,
-		  user_started_at, user_ended_at, error, wait_for, return_target, comment, event_name, event_data,
-		  dispatch_result, dispatch_by_input, end_state)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                                (:execution/id execution)
-                                (:execution/version execution)
-                                (:execution/state-machine-id execution)
-                                (:execution/state-machine-version execution)
-                                (:execution/mode execution)
-                                (:execution/status execution)
-                                (:execution/state execution)
-                                (nippy/fast-freeze (:execution/memory execution))
-                                (nippy/fast-freeze (:execution/input execution))
-                                (:execution/enqueued-at execution)
-                                (:execution/started-at execution)
-                                (:execution/finished-at execution)
-                                (:execution/failed-at execution)
-                                (:execution/step-started-at execution)
-                                (:execution/step-ended-at execution)
-                                (:execution/user-start execution)
-                                (:execution/user-end execution)
-                                (nippy/fast-freeze (:execution/error execution))
-                                (nippy/fast-freeze (:execution/wait-for execution))
-                                (nippy/fast-freeze (:execution/return-target execution))
-                                (:execution/comment execution)
-                                (:execution/event-name execution)
-                                (nippy/fast-freeze (:execution/event-data execution))
-                                (nippy/fast-freeze (:execution/dispatch-result execution))
-                                (nippy/fast-freeze (:execution/dispatch-by-input execution))
-                                (:execution/end-state execution)])
-           {:ok     true
-            :entity execution}
-           (catch org.postgresql.util.PSQLException pe
-             (let [expected-unique "23505"]
-               (if (= expected-unique (.getSQLState (.getServerErrorMessage pe)))
-                 {:ok false :error :version-conflict}
-                 (throw pe))))))))))
+    (.submit pool (fn [] (save-execution ds execution)))))
 
 (defn make-persistence [db-spec]
   (->Persistence db-spec nil (Executors/newSingleThreadExecutor) #_(Executors/newFixedThreadPool 8)))
 
 (comment
 
-  (def store (make-persistence {:jdbcUrl "jdbc:postgresql://localhost:5432/workflow?user=postgres&password=password"}))
+  (def store (make-persistence {:jdbcUrl "jdbc:postgresql://localhost:5432/workflow_dev?user=postgres&password=password"}))
   (def store (p/open store))
   (p/close store)
 
@@ -419,7 +474,7 @@
                                          (- (:execution/step-ended-at sm)
                                             (:execution/step-started-at sm))
                                          1000000)))
-                   :user-duration-ms (when (and (:execution/user-start sm) (:execution/user-end sm))
+                   :user-duration-ms (when (and (:execution/user-started-at sm) (:execution/user-ended-at sm))
                                        (double
                                         (/
                                          (- (:execution/user-end sm)
