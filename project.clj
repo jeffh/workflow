@@ -1,4 +1,4 @@
-(defproject workflow "0.1.0-SNAPSHOT"
+(defproject net.jeffhui/workflow "0.1.0-SNAPSHOT"
   :description "Data programs"
   :url "https://github.com/jeffh/workflow"
   :license {:name "EPL-2.0 WITH Classpath-exception-2.0"
@@ -14,8 +14,10 @@
                  [com.zaxxer/HikariCP "5.0.0"]
                  [org.postgresql/postgresql "42.2.24"]
                  [metosin/malli "0.6.2"]]
+  :source-paths ["src"]
   :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
   :repl-options {:init-ns workflow.api}
-  :profiles {:dev {:dependencies [[diff-eq "0.2.3"]]
+  :profiles {:test {:source-paths ["test"]}
+             :dev {:dependencies [[diff-eq "0.2.3"]]
                    :injections   [(require 'diff-eq.core)
                                   (diff-eq.core/diff!)]}})
