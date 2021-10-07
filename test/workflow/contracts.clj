@@ -113,6 +113,7 @@
                                                                        (:execution/state-machine-id execution-step)
                                                                        {:version (:execution/state-machine-version execution-step)}))
                   "persistence should return a single execution when fetching by state machine")))
+
           (testing "[happy path - 2 executions; 2 steps, 1 step]"
             (testing "save-execution returns a future that saves the execution"
               (let [r (protocol/save-execution persistence execution2-started)]
@@ -134,6 +135,16 @@
                                                                                           (:execution/state-machine-id execution-step)
                                                                                           {:version (:execution/state-machine-version execution-step)}))
                   "persistence should return 2 executions when fetching by state machine")))
+
+          (testing "[exceptional cases]"
+            (testing "errors with duplicate execution versions"
+              (let [r (protocol/save-execution persistence execution-started)]
+                (is (not= :timeout (deref r 1000 :timeout))
+                    "save may succeed or fail"))
+
+              (is (= execution-started (api/fetch-execution persistence (:execution/id execution-started) (:execution/version execution-started)))
+                  "the original state machine remains unchanged")))
+
           (finally
             (api/close persistence)))))))
 

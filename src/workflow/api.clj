@@ -39,11 +39,7 @@
 
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
 (defn- save-execution [persistence execution]
-  (let [errs (s/err-for-execution execution)]
-    (if errs
-      (future {:ok    false
-               :error errs})
-      (protocol/save-execution persistence execution))))
+  (protocol/save-execution persistence (s/debug-assert-execution execution)))
 
 (defn io-ops [] (keys (methods protocol/io)))
 

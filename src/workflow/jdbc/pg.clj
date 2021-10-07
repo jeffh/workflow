@@ -187,6 +187,13 @@
                                   (:execution/end-state execution)])
       {:ok     true
        :entity execution}
+      (catch clojure.lang.ExceptionInfo ei
+        (let [expected-unique "23505"]
+          (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
+            (if (= expected-unique sql-state)
+              {:ok false :error :version-conflict}
+              (throw ei))
+            (throw ei))))
       (catch org.postgresql.util.PSQLException pe
         (let [expected-unique "23505"]
           (if-let [msg (.getServerErrorMessage pe)]
