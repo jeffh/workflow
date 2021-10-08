@@ -1,3 +1,15 @@
+[ ] Backends
+  [ ] Schedulers
+    [ ] Kafka
+    [ ] SQS
+    [ ] DynamoDB Streaming?
+  [ ] Persistence
+    [ ] Kafka? (needs research in KTables)
+    [ ] DynamoDB
+    [ ] Postgresql
+    [ ] CockroachDB
+    [ ] ElasticSearch?
+    [ ] Logging Aggregators?
 [ ] Visualizations to export / supprt
   [ ] Flow Charts
   [ ] Sequence Diagrams
