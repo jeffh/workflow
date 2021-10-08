@@ -21,10 +21,13 @@
 
 (def open protocol/open)
 (def close protocol/close)
+(def register-execution-handler protocol/register-execution-handler)
 (defn fetch-statem [persistence statem-id statem-version]
-  (s/debug-assert-statem (protocol/fetch-statem persistence statem-id statem-version)))
+  (when-let [s (protocol/fetch-statem persistence statem-id statem-version)]
+    (s/debug-assert-statem s)))
 (defn fetch-execution [persistence execution-id execution-version]
-  (s/debug-assert-execution (protocol/fetch-execution persistence execution-id execution-version)))
+  (when-let [e (protocol/fetch-execution persistence execution-id execution-version)]
+    (s/debug-assert-execution e)))
 (defn fetch-execution-history [persistence execution-id]
   (map s/debug-assert-execution (protocol/fetch-execution-history persistence execution-id)))
 (defn executions-for-statem [persistence state-machine-id options]
@@ -89,6 +92,7 @@
                                   :execution/memory                (if (nil? initial-state)
                                                                      (eval-action (:state-machine/context state-machine)
                                                                                   fx
+                                                                                  no-io
                                                                                   nil
                                                                                   input)
                                                                      initial-state)
@@ -105,7 +109,9 @@
                                   :execution/return-target         (::return input)
                                   :execution/wait-for              nil
                                   :execution/return-data           nil
-                                  :execution/end-state             nil}
+                                  :execution/end-state             nil
+                                  :execution/dispatch-by-input     nil
+                                  :execution/dispatch-result       nil}
            {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
        (if error
          [false nil {:error error}]
@@ -114,7 +120,7 @@
 
 (defn trigger [fx execution-id input]
   (if-let [execution (s/debug-assert-execution (fetch-execution fx execution-id :latest))]
-    (enqueue-execution fx execution input)
+    (enqueue-execution fx (:execution/id execution) input)
     {:error ::execution-not-found}))
 
 (defn- timed-run* [timeout-in-msec f]
@@ -154,14 +160,14 @@
   (let [err (Throwable->map e)]
     (println "error: " (pr-str starting-execution) "; " (pr-str err))
     (.printStackTrace e)
-    (loop [attempt 3
+    (loop [attempt   3
            execution starting-execution]
       (if (zero? attempt)
         (throw (ex-info "Failed to save failure" {:execution starting-execution} e))
         (let [now (now!)]
           (if-let [execution' (save-execution
                                fx
-                               (merge execution {:execution/comment            "Error running step"
+                               (merge execution {:execution/comment       "Error running step"
                                                  :execution/version       (inc (:execution/version execution))
                                                  :execution/error         err
                                                  :execution/status        "failed"
@@ -208,7 +214,8 @@
    (map (fn [[starting-execution input]]
           (assert (= (:state-machine/id state-machine) (:execution/state-machine-id starting-execution))
                   (pr-str (:state-machine/id state-machine) (:execution/state-machine-id starting-execution)))
-          (let [timeout (or (:state-machine/timeout-msec state-machine) sync-timeout)]
+          (let [timeout (or (:state-machine/timeout-msec state-machine) sync-timeout)
+                latest-execution (atom starting-execution)]
             (try
               (timed-run
                timeout
@@ -218,6 +225,7 @@
                        entity         (merge execution updated-fields {:execution/step-ended-at now})
                        tx             (save-execution fx entity)]
                    (assert (not= "running" (:execution/status entity)))
+                   (reset! latest-execution execution)
                    (if (can-continue? state-machine entity nil)
                      (recur (:entity @(acquire-execution fx executor-name entity nil)))
                      ;; TODO: if we fail to save... is there anything we can do?
@@ -230,7 +238,7 @@
                          (maybe-return-execution! fx entity)
                          entity))))))
               (catch Exception e
-                (record-exception fx starting-execution e))))))))
+                (record-exception fx @latest-execution e))))))))
 
 (defn- apply-action [start-time execution action]
   (let [action   (merge {:name (:state action)}
@@ -370,9 +378,10 @@
                                                             {:error t}))
                                               condition (if (:if invoke)
                                                           (eval-action (:if invoke) fx no-io data input output)
-                                                          true)]
-                                          (eval-action (if condition (:then invoke) (:else invoke))
-                                                       fx data input output))
+                                                          true)
+                                              clause (if condition (:then invoke) (:else invoke))]
+                                          (cond-> clause
+                                            (:context clause) (update :context eval-action fx no-io data input output)))
 
                                         :else
                                         (throw (ex-info "Unrecognized invocation type" {:invoke invoke}))))
@@ -473,7 +482,8 @@
   acknowledgements).
   "
   [fx state-machine starting-execution input]
-  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)]
+  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)
+        latest-execution (atom starting-execution)]
     (try
       (timed-run
        timeout
@@ -492,6 +502,7 @@
                               :execution-id (:db/id execution)
                               :timestamp    now})))
 
+           (reset! latest-execution execution)
            (if (can-continue? state-machine entity nil)
              (recur (do (deref tx 1000 ::timeout)
                         (:entity @(acquire-execution fx "linear-execution" entity nil)))
@@ -506,7 +517,7 @@
                  (maybe-return-execution! fx entity)
                  entity))))))
       (catch Exception e
-        (record-exception fx starting-execution e)))))
+        (record-exception fx latest-execution e)))))
 
 (defn- run-linear-execution-inconsistent
   "Runs an execution, saving its state into the database executions. Avoids
@@ -521,7 +532,8 @@
   acknowledgements).
   "
   [fx state-machine starting-execution input]
-  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)]
+  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)
+        latest-execution (atom starting-execution)]
     (try
       (timed-run
        timeout
@@ -539,6 +551,7 @@
                              {:context      entity
                               :execution-id (:db/id execution)
                               :timestamp    now})))
+           (reset! latest-execution execution)
            (if (can-continue? state-machine entity nil)
              (recur (do (acquire-execution fx "linear-execution" entity nil)
                         entity)
@@ -553,7 +566,7 @@
                  (maybe-return-execution! fx entity)
                  entity))))))
       (catch Exception e
-        (record-exception fx starting-execution e)))))
+        (record-exception fx latest-execution e)))))
 
 (defn- run-fair-execution
   "Partially runs an execution while managing its corresponding state in the
@@ -590,7 +603,7 @@
                          :execution-id (:db/id execution)
                          :timestamp    now})))
       (when (can-continue? state-machine entity nil)
-        (enqueue-execution fx entity nil))
+        (enqueue-execution fx (:execution/id entity) nil))
       (maybe-return-execution! fx entity)
       entity)
     (catch Exception e
@@ -607,7 +620,7 @@
   ([fx state-machine execution] (async-run fx state-machine execution nil))
   ([fx state-machine execution input]
    (let [ok (:ok @(save-execution fx execution))]
-     (when ok (enqueue-execution fx execution input))
+     (when ok (enqueue-execution fx (:execution/id execution) input))
      [(boolean ok) (when ok (:execution/id execution)) nil])))
 
 (defmethod executor :default [mode] {:error ::unknown-executor :value mode})
@@ -616,24 +629,25 @@
 (defmethod executor "async-throughput" [_] {:begin async-run :step run-linear-execution})
 (defmethod executor "async-throughput-inconsistent" [_] {:begin async-run :step run-linear-execution-inconsistent})
 
-(defn run-executions [fx executor-name eid-input-pairs]
-  (doall
-   (sequence
-    (comp
-     (keep (fn [[eid input]]
-             (loop [attempts 1]
-               (when (< attempts 30)
-                 (when-let [e (fetch-execution fx eid :latest)]
-                   (when (:execution/state e)
-                ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
-                     (when-let [res (acquire-execution fx executor-name e input)]
-                       (if-let [e (:entity (deref res 10000 nil))]
-                         [e input]
-                         (do
-                           (Thread/sleep (* attempts attempts))
-                           (recur (inc attempts)))))))))))
-     (map (fn [[execution input]]
-            (let [state-machine  (fetch-statem fx (:execution/state-machine-id execution) (:execution/state-machine-version execution))
-                  {:keys [step]} (executor (:execution/mode execution))]
-              (step fx state-machine execution input)))))
-    eid-input-pairs)))
+(defn create-execution-handler
+  ([fx] (create-execution-handler fx nil))
+  ([fx {:keys [executor-name]}]
+   (fn handler [eid input]
+     (prn "RUN" eid)
+     (let [executor-name (or executor-name (.getName (Thread/currentThread)))
+           [execution input]
+           (loop [attempts 1]
+             (when (< attempts 30)
+               (when-let [e (fetch-execution fx eid :latest)]
+                 (when (:execution/state e)
+                   ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
+                   (when-let [res (acquire-execution fx executor-name e input)]
+                     (if-let [e (:entity (deref res 10000 nil))]
+                       [e input]
+                       (do
+                         (Thread/sleep (* attempts attempts))
+                         (recur (inc attempts)))))))))]
+       (when execution
+         (let [state-machine  (fetch-statem fx (:execution/state-machine-id execution) (:execution/state-machine-version execution))
+               {:keys [step]} (executor (:execution/mode execution))]
+           (step fx state-machine execution input)))))))

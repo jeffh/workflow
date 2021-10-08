@@ -1,5 +1,6 @@
 (ns workflow.impl.kafka.messaging
-  (:require [taoensso.nippy :as nippy])
+  (:require [taoensso.nippy :as nippy]
+            [clojure.string :as string])
   (:import org.apache.kafka.common.serialization.Serdes
            org.apache.kafka.common.serialization.Serializer
            org.apache.kafka.common.serialization.Deserializer
@@ -166,8 +167,6 @@
   (.initTransactions p)
   p)
 
-(.iterator ^java.lang.Iterable (map identity nil))
-
 (defn send!
   "Sends a sequence of messages through a given producer.
 
@@ -184,10 +183,13 @@
   - headers :: a map of key value pairs where keys are strings, and values are String or bytes
   "
   ([^Producer producer topic key value] @(.send producer (ProducerRecord. (str topic) key value)))
-  ([^Producer producer topic key value headers] @(.send producer (ProducerRecord. (str topic) key value (.iterator ^java.lang.Iterable (map (fn [[k v]] (->header k v)) headers)))))
+  ([^Producer producer topic key value headers]
+   (let [^Integer partition nil]
+     @(.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))
   ([^Producer producer messages]
-   (doseq [[topic key value headers] messages]
-     (.send producer (ProducerRecord. (str topic) key value (.iterator ^java.lang.Iterable (map (fn [[k v]] (->header k v)) headers)))))
+   (let [^Integer partition nil]
+     (doseq [[topic key value headers] messages]
+       (.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))
    (.flush producer)))
 
 #_(defn send-tx!
@@ -399,7 +401,8 @@
   (assert (ifn? value-deserializer)
           "value-deserializer must be a function")
   (let [closed (atom false)
-        t      (doto (Thread. (fn [] (consumer-loop consumer closed options)))
+        t      (doto (Thread. (fn [] (consumer-loop consumer closed options))
+                              (format "backgrounded-consumer[%s]" (string/join "," topics)))
                  (.start))]
     (Closer.
      (fn []
@@ -411,8 +414,9 @@
 (defn close! [obj]
   (when obj
     (cond (instance? java.lang.AutoCloseable obj) (.close ^java.lang.AutoCloseable obj)
-          (instance? java.io.Closeable obj) (.close ^java.io.Closeable obj)
-          :else (.close obj))))
+          (instance? java.io.Closeable obj)       (.close ^java.io.Closeable obj)
+          (fn? obj)                               (obj)
+          :else                                   (throw (IllegalArgumentException. (str "Don't know how to close: " obj))))))
 
 #_(defstate producer
     :start (->producer {"bootstrap.servers"  "localhost:9092"})

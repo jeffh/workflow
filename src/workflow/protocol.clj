@@ -60,12 +60,15 @@
 (defprotocol Scheduler
   (sleep-to [_ timestamp execution-id options]
     "Schedules the given execution to be enqueued after a specific
-     datetime. Return value is truthy on successfully scheduling.")
-  (enqueue-execution [_ execution options]
+     datetime. Return value is truthy on successfully scheduling.
+
+    timestamp :- #inst / Date
+    ")
+  (enqueue-execution [_ execution-id options]
     "Enqueues an execution to resume execution. Returns a core.async/chan if a reply is expected.
 
      Parameters:
-	   execution - the execution entity to run.
+	   execution - the execution-id to run.
 	   options - {::workflow/reply? bool
 	              :as args}
           Represents the input for resuming the execution. reply? indicates that a
@@ -74,8 +77,11 @@
   (register-execution-handler [_ f]
     "Registers f to process executions. f = nil means to unregister.
 
+    Implementations are expected to set up connection work necessary to process
+    work within this method.
+
     f must be idempotent.
-    f :- (fn [executions :- [(execution-id, input)]] :- reply-value)"))
+    f :- (fn [execution-id :- uuid?, input :- map?] :- reply-value)"))
 
 (defn sleep
   "Schedules the given execution to be enqueued after a certain amount of

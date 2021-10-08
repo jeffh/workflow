@@ -440,7 +440,7 @@ ORDER BY e.started_at DESC;"
 
                                                          "delivered"   {:end    true
                                                                         :return {:delivered true}}}})
-    (p/register-execution-handler fx (partial wf/run-executions fx :example))
+    (p/register-execution-handler fx (wf/create-execution-handler fx))
     (def out (wf/start fx "order" nil))
     (do
       (wf/trigger fx (second out) {::wf/action "add"

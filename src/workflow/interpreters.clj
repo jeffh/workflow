@@ -92,7 +92,7 @@
                                             (when (not= ::p/nothing output)
                                               {'output output}))})
       (catch Exception e
-        (throw (ex-info "Failed to interpret action" {:code edn-expr} e))))))
+        (throw (ex-info "Failed to interpret action" {:code edn-expr :output? (not= ::p/nothing output)} e))))))
 
 (defn clj-eval-action [edn-expr io state input output]
   (try
@@ -108,8 +108,8 @@
 
 (defrecord Sandboxed []
   p/MachineInterpreter
-  (evaluate-expr [_ expr state input output] (eval-action expr io state input output)))
+  (evaluate-expr [_ expr io state input output] (eval-action expr io state input output)))
 
 (defrecord Naive []
   p/MachineInterpreter
-  (evaluate-expr [_ expr state input output] (clj-eval-action expr io state input output)))
+  (evaluate-expr [_ expr io state input output] (clj-eval-action expr io state input output)))

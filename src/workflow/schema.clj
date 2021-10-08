@@ -64,7 +64,7 @@
    [:execution/state-machine-version integer?]
    [:execution/mode string?]
    [:execution/status [:enum "queued" "running" "failed" "waiting" "paused" "finished" "failed-resumable"]]
-   [:execution/state State]
+   [:execution/state [:maybe State]] ;; nil indicates terminated
    [:execution/memory any?]
    [:execution/input any?]
    [:execution/enqueued-at [:maybe Time]]

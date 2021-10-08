@@ -6,39 +6,27 @@
             [taoensso.nippy :as nippy]
             [clojure.core.async :as async])
   (:import java.util.Date
+           java.util.UUID
            java.time.Instant))
 
-(defrecord Scheduler [producer consumer worker execution-topic response-topic persistence handler open-tasks close-poller]
-  protocol/Scheduler
-  (sleep-to [_ timestamp execution-id options]
-            (let [task-id (protocol/save-task persistence timestamp execution-id options)]
-              (swap! open-tasks assoc task-id (async/chan 1))
-              (nil? task-id)))
-  (enqueue-execution [_ execution options]
-    (assert (:execution/id execution))
-    (assert (:execution/version execution))
-    (let [execution-id (:execution/id execution)
-          reply        (when (::wf/reply? options) (async/chan 1))
-          options      (dissoc options ::wf/reply?)
-          task-id      (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
-      (when reply (swap! open-tasks assoc task-id reply))
-      (messaging/send! producer execution-topic (str execution-id) (nippy/fast-freeze {:task/op                :run
-                                                                                       :task/id                task-id
-                                                                                       :task/execution-id      execution-id
-                                                                                       :task/execution-options options
-                                                                                       :task/reply-topic       response-topic}))
-      reply))
-  (register-execution-handler [_ f]
-    (reset! handler f)
-    true)
-  java.io.Closeable
-  (close [_]
-    (close-poller)
-    (messaging/close! worker)
-    ;; (messaging/close! consumer) ;; done by closing worker
-    (messaging/close! producer)))
+(defn- responses-handler [producer response-topic persistence handler open-tasks msg]
+  (let [task (:value msg)]
+    (condp = (:task/op task)
+      :complete (when-let [ch (get @open-tasks (:task/id task))]
+                  (when-let [res (:task/response task)]
+                    (async/put! ch res))
+                  (async/close! ch)
+                  (swap! open-tasks dissoc (:task/id task)))
+      :run (when-let [f (first @handler)]
+             (let [res     (f (:task/execution-id task) (:task/execution-options task))
+                   enc-res (nippy/fast-freeze (assoc task
+                                                     :task/op :complete
+                                                     :task/response res))]
+               (protocol/complete-task persistence (:task/id task) res)
+               ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
+               (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res))))))
 
-(defn- message-handler [producer response-topic persistence handler open-tasks msg]
+(defn- execution-handler [producer persistence handler open-tasks msg]
   ;; limitations:
   ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
   (let [task (:value msg)]
@@ -47,18 +35,110 @@
                   (async/put! ch (:task/response task))
                   (async/close! ch)
                   (swap! open-tasks dissoc (:task/id task)))
-      :run (when-let [f @handler]
-             (let [res     (f [[(:task/execution-id task) (:task/execution-options task)]])
+      :run (when-let [f (first @handler)]
+             (let [res     (f (:task/execution-id task) (:task/execution-options task))
                    enc-res (nippy/fast-freeze (assoc task
                                                      :task/op :complete
                                                      :task/response res))]
                (protocol/complete-task persistence (:task/id task) res)
               ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
-               (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res))))))
+               (when-let [response-topic (:task/reply-topic task)]
+                 (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))
 
-(defn make-scheduler [consumer-id persistence {:keys [producer-options consumer-options status-poll-interval-ms exception-handler
+(defn- message-handler [producer persistence handler open-tasks msg]
+  ;; limitations:
+  ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
+  (let [task (:value msg)]
+    (condp = (:task/op task)
+      :complete (when-let [ch (get @open-tasks (:task/id task))]
+                  (async/put! ch (:task/response task))
+                  (async/close! ch)
+                  (swap! open-tasks dissoc (:task/id task)))
+      :run (when-let [f (first @handler)]
+             (let [res     (f (:task/execution-id task) (:task/execution-options task))
+                   enc-res (nippy/fast-freeze (assoc task
+                                                     :task/op :complete
+                                                     :task/response res))]
+               (protocol/complete-task persistence (:task/id task) res)
+              ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
+               (when-let [response-topic (:task/reply-topic task)]
+                 (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))
+
+(defrecord Scheduler [producer responses-worker handler-consumer-fn execution-topic response-topic persistence handler open-tasks close-poller]
+  protocol/Scheduler
+  (sleep-to [_ timestamp execution-id options]
+    (let [task-id (protocol/save-task persistence timestamp execution-id options)]
+              (swap! open-tasks assoc task-id (async/chan 1))
+              (nil? task-id)))
+  (enqueue-execution [_ execution-id options]
+    (let [reply   (when (::wf/reply? options) (async/chan 1))
+          options (dissoc options ::wf/reply?)
+          task-id (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
+      (when reply (swap! open-tasks assoc task-id reply))
+      (messaging/send! producer execution-topic (str execution-id)
+                       (nippy/fast-freeze (merge {:task/op                :run
+                                                  :task/id                task-id
+                                                  :task/execution-id      execution-id
+                                                  :task/execution-options options}
+                                                 (when reply {:task/reply-topic response-topic}))))
+      reply))
+  (register-execution-handler [_ f]
+    (if (and (nil? (second @handler)) f)
+      (reset! handler [f (messaging/backgrounded-consumer
+                          (handler-consumer-fn)
+                          {:topics          #{execution-topic}
+                           :process-message (partial execution-handler producer persistence handler open-tasks)})])
+      (swap! handler update 0 f))
+    (prn "handler" @handler)
+    true)
+  java.io.Closeable
+  (close [_]
+    (close-poller)
+    (when-let [worker (second @handler)] (messaging/close! worker))
+    (messaging/close! responses-worker)
+    (messaging/close! producer)))
+
+;; TODO(jeff): rename status-poll-interval-ms to something more API-consumer centric - perhaps recovery-poll-interval-ms?
+(defn make-scheduler* [sch-persistence producer responses-consumer make-handler-consumer-fn
+                       {:keys [executions-topic responses-topic
+                               status-poll-interval-ms exception-handler]
+                        :or   {executions-topic        "workflow-executions"
+                               responses-topic         "workflow-responses"
+                               status-poll-interval-ms 5000}}]
+  (let [open-tasks       (atom {})
+        handler          (atom nil)
+        responses-worker (messaging/backgrounded-consumer
+                          responses-consumer
+                          {:topics          #{responses-topic}
+                           :process-message (partial message-handler producer sch-persistence handler open-tasks)})
+        ;; TODO(jeff): each topic needs its own consumer, response-topic-config needs unique consumer group per every listener
+        cancel-poll-task (protocol/schedule-recurring-local-task!
+                          status-poll-interval-ms status-poll-interval-ms
+                          (fn []
+                            (try
+                              (when-let [open-tasks (not-empty (keys @open-tasks))]
+                                (let [outstanding-tasks (filter (comp (set open-tasks) :task/id)
+                                                                (protocol/runnable-tasks sch-persistence (Date.)))]
+                                  (doseq [t     outstanding-tasks
+                                          :when (nil? (:task/response t))]
+                                    (messaging/send! producer
+                                                     executions-topic
+                                                     (str (:task/execution-id t))
+                                                     (nippy/fast-freeze (assoc t :task/op :run))))))
+                              (catch Throwable t
+                                (if exception-handler
+                                  (exception-handler t)
+                                  (.printStackTrace t))))))]
+    (->Scheduler producer responses-worker make-handler-consumer-fn
+                 executions-topic responses-topic sch-persistence
+                 handler open-tasks cancel-poll-task)))
+
+(defn make-scheduler [consumer-id persistence {:keys [producer-fn consumer-fn
+                                                      producer-options consumer-options status-poll-interval-ms exception-handler
                                                       execution-topic-config response-topic-config]
-                                               :or   {status-poll-interval-ms 5000}}]
+                                               :or   {status-poll-interval-ms 5000
+                                                      producer-fn             messaging/->producer
+                                                      consumer-fn             messaging/->consumer}}]
   (let [execution-topic-config (merge {:name               "workflow-executions"
                                        :num-partitions     100
                                        :replication-factor 1}
@@ -73,28 +153,13 @@
                                    @(messaging/create-topics-if-needed adm [execution-topic-config response-topic-config])
                                    (finally
                                      (messaging/close! adm))))
-        open-tasks             (atom {})
-        p                      (messaging/->producer producer-options)
-        c                      (messaging/->consumer consumer-id consumer-options)
-        handler                (atom nil)
-        ;; TODO(jeff): each topic needs its own consumer, response-topic-config needs unique consumer group per every listener
-        worker                 (messaging/backgrounded-consumer c {:topics          #{(:name execution-topic-config) (:name response-topic-config)}
-                                                                   :process-message (partial message-handler p (:name response-topic-config) persistence handler open-tasks)})
-        cancel-poll-task     (protocol/schedule-recurring-local-task!
-                              status-poll-interval-ms status-poll-interval-ms
-                              (fn []
-                                (try
-                                  (when-let [open-tasks (not-empty (keys @open-tasks))]
-                                    (let [outstanding-tasks (filter (comp (set open-tasks) :task/id)
-                                                                    (protocol/runnable-tasks persistence (Date.)))]
-                                      (doseq [t     outstanding-tasks
-                                              :when (nil? (:task/response t))]
-                                        (messaging/send! p (:name execution-topic-config) (str (:task/execution-id t)) (nippy/fast-freeze (assoc t :task/op :run))))))
-                                  (catch Throwable t
-                                    (if exception-handler
-                                      (exception-handler t)
-                                      (.printStackTrace t))))))]
-    (->Scheduler p c worker (:name execution-topic-config) (:name response-topic-config) persistence handler open-tasks cancel-poll-task)))
+        p                      (producer-fn producer-options)
+        c                      (consumer-fn (str consumer-id "-" (UUID/randomUUID)) consumer-options)]
+    (make-scheduler* persistence p c #(consumer-fn consumer-id consumer-options)
+                     {:executions-topic        (:name execution-topic-config)
+                      :responses-topic         (:name response-topic-config)
+                      :status-poll-interval-ms status-poll-interval-ms
+                      :exception-handler       exception-handler})))
 
 (comment
   (messaging/close! (:scheduler fx))
@@ -110,7 +175,7 @@
       (require '[workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
       (defn make [consumer-id options]
         (let [statem (mem/make-statem-persistence)]
-          (wf/effects {:statem      statem 
+          (wf/effects {:statem      statem
                        :execution   (mem/make-execution-persistence statem)
                        :scheduler   (make-scheduler consumer-id (mem/make-scheduler-persistence) options)
                        :interpreter (->Naive)})))
@@ -122,29 +187,29 @@
                                          :start-at       "create"
                                          :execution-mode "async-throughput"
                                          :context        '{:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
-                                         :states         '{"create"         {:always [{:name  "created"
-                                                                                       :state "cart"}]}
-                                                           "cart"           {:actions {"add"    {:name    "added"
-                                                                                                 :state   "cart"
-                                                                                                 :context (update-in state [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
-                                                                                       "remove" {:name    "removed"
-                                                                                                 :state   "cart"
-                                                                                                 :context (letfn [(sub [a b]
-                                                                                                                    (let [a (vec a)
-                                                                                                                          n (count a)]
-                                                                                                                      (loop [out (transient [])
-                                                                                                                             i   0
-                                                                                                                             b   (frequencies b)]
-                                                                                                                        (if (= i n)
-                                                                                                                          (persistent! out)
-                                                                                                                          (let [ai (a i)]
-                                                                                                                            (if (pos? (b ai 0))
-                                                                                                                              (recur out (inc i) (update b ai dec))
-                                                                                                                              (recur (conj! out ai) (inc i) b)))))))]
-                                                                                                            (update-in state [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
-                                                                                       "place"  {:state "submitted"}}}
-                                                           "submitted"      {:actions {"fraud-approve" {:state "fraud-approved"}
-                                                                                       "fraud-reject"  {:state "fraud-rejected"}}}
+                                         :states         '{"create"    {:always [{:name  "created"
+                                                                                  :state "cart"}]}
+                                                           "cart"      {:actions {"add"    {:name    "added"
+                                                                                            :state   "cart"
+                                                                                            :context (update-in state [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
+                                                                                  "remove" {:name    "removed"
+                                                                                            :state   "cart"
+                                                                                            :context (letfn [(sub [a b]
+                                                                                                               (let [a (vec a)
+                                                                                                                     n (count a)]
+                                                                                                                 (loop [out (transient [])
+                                                                                                                        i   0
+                                                                                                                        b   (frequencies b)]
+                                                                                                                   (if (= i n)
+                                                                                                                     (persistent! out)
+                                                                                                                     (let [ai (a i)]
+                                                                                                                       (if (pos? (b ai 0))
+                                                                                                                         (recur out (inc i) (update b ai dec))
+                                                                                                                         (recur (conj! out ai) (inc i) b)))))))]
+                                                                                                       (update-in state [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
+                                                                                  "place"  {:state "submitted"}}}
+                                                           "submitted" {:actions {"fraud-approve" {:state "fraud-approved"}
+                                                                                  "fraud-reject"  {:state "fraud-rejected"}}}
 
                                                            "fraud-approved" {:always [{:state "released"}]}
                                                            "fraud-rejected" {:actions {"cancel" {:state "canceled"}}}
@@ -162,54 +227,60 @@
                                                                                        :state "canceled"}]}
                                                            "shipped"        {:end true}
                                                            "canceled"       {:end true}}})
-      (wf/save-statem fx #:state-machine{:id             "shipment"
-                                         :version        1
-                                         :start-at       "created"
-                                         :execution-mode "async-throughput"
-                                         :context        '{:id        "S1"
-                                                           :order     (:order input)
-                                                           :delivered false}
-                                         :states         '{"created"     {:always [{:name  "fulfilled"
-                                                                                    :state "outstanding"}]}
-                                                           "outstanding" {:always  [{:name   "fetched"
-                                                                                     :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                                              :if    (<= 200 (:status output) 299)
-                                                                                              :then  {:state   "fetched"
-                                                                                                      :context {:response {:n (:n (:json (:body output)))}}}
-                                                                                              :else  {:state "failed"}}}]
-                                                                          :actions {"cancel" {:state "canceled"}}}
-                                                           "failed"      {:always [{:name     "retry"
-                                                                                    :state    "outstanding"
-                                                                                    :wait-for {:seconds 5}}]}
+      @(wf/save-statem fx #:state-machine{:id             "shipment"
+                                          :version        1
+                                          :start-at       "created"
+                                          :execution-mode "async-throughput"
+                                          :context        '{:id        "S1"
+                                                            :order     (:order input)
+                                                            :delivered false}
+                                          :states         '{"created"     {:always [{:name  "fulfilled"
+                                                                                     :state "outstanding"}]}
+                                                            "outstanding" {:always  [{:id     "fetch"
+                                                                                      :name   "fetched"
+                                                                                      :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
+                                                                                               :if    (<= 200 (:status output) 299)
+                                                                                               :then  {:state   "fetched"
+                                                                                                       :context {:response {:n (:n (:json (:body output)))}}}
+                                                                                               :else  {:state "failed"}}}]
+                                                                           :actions {"cancel" {:state "canceled"}}}
+                                                            "failed"      {:always [{:name     "retry"
+                                                                                     :state    "outstanding"
+                                                                                     :wait-for {:seconds 5}}]}
 
-                                                           "canceled"    {:end    true
-                                                                          :return {:delivered false}}
+                                                            "canceled" {:end    true
+                                                                        :return {:delivered false}}
 
-                                                           "fetched"     {:always [{:name    "deliver"
-                                                                                    :state   "delivered"
-                                                                                    :when    (> 3 (:n (:response state)))
-                                                                                    :context {:response nil
-                                                                                              :result   (:n (:response state))}}
-                                                                                   {:name     "retry"
-                                                                                    :state    "outstanding"
-                                                                                    :context  {:response nil}
-                                                                                    :wait-for {:seconds 5}}]}
+                                                            "fetched" {:always [{:name    "deliver"
+                                                                                 :state   "delivered"
+                                                                                 :when    (> 3 (:n (:response state)))
+                                                                                 :context {:response nil
+                                                                                           :result   (:n (:response state))}}
+                                                                                {:name     "retry"
+                                                                                 :state    "outstanding"
+                                                                                 :context  {:response nil}
+                                                                                 :wait-for {:seconds 5}}]}
 
-                                                           "delivered"   {:end    true
-                                                                          :return {:delivered true}}}})
-      (protocol/register-execution-handler fx (partial wf/run-executions fx :example))
+                                                            "delivered" {:end    true
+                                                                         :return {:delivered true}}}})
+
+      (protocol/register-execution-handler fx (wf/create-execution-handler fx))
       (def out (wf/start fx "order" nil)))
+
     (do
       (wf/trigger fx (second out) {::wf/action "add"
                                    ::wf/reply? true
-                                   :sku       "bns12"
-                                   :qty       1})
+                                   :sku        "bns12"
+                                   :qty        1})
       #_(Thread/sleep 100)
       (wf/trigger fx (second out) {::wf/action "place"})
       #_(Thread/sleep 100)
       (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
                                             ::wf/reply? true}))
       (async/take! res prn)))
+
+
+  (messaging/close! (:scheduler fx))
 
   (messaging/metrics (:producer (:scheduler fx)))
 
@@ -241,8 +312,8 @@
                                            (- (:execution/user-ended-at sm)
                                               (:execution/user-started-at sm))
                                            1000000)))}))
-           (wf/executions-for-statem fx "order" {:version :latest}))))
-
+           (mapcat (fn [e] (wf/fetch-execution-history fx (:execution/id e)))
+                   (wf/executions-for-statem fx "order" {:version :latest})))))
 
     (clojure.pprint/print-table
      (sort-by (fn [sm] [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
@@ -253,7 +324,7 @@
                        :execution/id
                        (sort-by (juxt :execution/state-machine-id :execution/version)
                                 (wf/executions-for-statem fx "order" {:version :latest})))
-            :let [e (last execs)]]
+            :let      [e (last execs)]]
       (println (:execution/state-machine-id e) "took" (double (/ (- (:execution/finished-at e) (:execution/enqueued-at e))
                                                                  1000000))
                "ms (enqueue->end)"

@@ -1,8 +1,10 @@
 (ns workflow.contracts
   (:require [clojure.test :refer [testing is]]
+            [clojure.core.async :as async]
             [workflow.api :as api]
             [workflow.memory :as mem]
-            [workflow.protocol :as protocol]))
+            [workflow.protocol :as protocol]
+            [workflow.api :as wf]))
 
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]
@@ -147,6 +149,40 @@
 
           (finally
             (api/close persistence)))))))
+
+(defn scheduler [doc-name creator]
+  (testing doc-name
+    (testing "conforms to a scheduler"
+      (let [sch     (api/open (creator))
+            queue   (async/chan 16)
+            replies (async/chan 16)]
+        (api/register-execution-handler sch (fn [execution-id execution-options]
+                                              (async/>!! queue [execution-id execution-options])
+                                              (async/<!! replies)))
+        (try
+          (testing "[happy path]"
+            (testing "enqueuing immediate execution, expecting no response"
+              (protocol/enqueue-execution sch #uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1})
+              (is (= [#uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1}] (async/<!! queue)))
+              (async/>!! replies {:test 1}))
+            (testing "enqueue immediate execution, expecting response"
+              (let [res (protocol/enqueue-execution sch #uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2 ::api/reply? true})]
+                (is (= [#uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2}]
+                       (update (async/<!! queue) 1 dissoc ::api/reply?)))
+                (async/>!! replies {:test 2})
+                (is (= {:test 2} (async/<!! res))
+                    "expect to receive reply")))
+            (testing "sleep execution later, expecting no response"
+              (let [sleep-duration 100
+                    res            (protocol/sleep sch sleep-duration #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3})
+                    start          (System/nanoTime)
+                    _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}] (async/<!! queue)))
+                    end            (System/nanoTime)
+                    delta-ms       (double (/ (- end start) 1000000))]
+                (is (>= delta-ms sleep-duration)
+                    "execution is deferred by at least the given amount"))))
+          (finally
+            (api/close sch)))))))
 
 (def ^:private execution-started
   #:execution{:comment               "Enqueued for execution"
