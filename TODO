@@ -1,15 +1,22 @@
 [ ] Backends
-  [ ] Schedulers
-    [ ] Kafka
+  [ ] Schedulers / Queuing
+    [x] Kafka
     [ ] SQS
     [ ] DynamoDB Streaming?
+    [ ] GCP Equivalents?
+    [ ] Azure Equivalents?
+    [ ] HornetQ?
   [ ] Persistence
     [ ] Kafka? (needs research in KTables)
     [ ] DynamoDB
-    [ ] Postgresql
+    [x] Postgresql
     [ ] CockroachDB
+    [ ] Cassandra
     [ ] ElasticSearch?
     [ ] Logging Aggregators?
+    [ ] GCP Equivalents?
+    [ ] Azure Equivalents?
+    [ ] HornetQ?
 [ ] Visualizations to export / supprt
   [ ] Flow Charts
   [ ] Sequence Diagrams
