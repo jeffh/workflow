@@ -355,10 +355,6 @@
             {}
             (remove :exception results))))
 
-(defrecord Closer [closer]
-  java.lang.AutoCloseable
-  (close [_] (closer)))
-
 (defn TopicPartition->map [^TopicPartition tp]
   {:topic     (.topic tp)
    :partition (.partition tp)})
@@ -434,10 +430,9 @@
                               (format "backgrounded-consumer[%s]-%s" (string/join "," topics)
                                       (str thread-name)))
                  (.start))]
-    (Closer.
-     (fn []
-       (reset! closed true)
-       (.wakeup consumer)))))
+    (fn closer []
+      (reset! closed true)
+      (.wakeup consumer))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;
 
