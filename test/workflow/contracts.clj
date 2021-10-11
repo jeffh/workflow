@@ -4,7 +4,10 @@
             [workflow.api :as api]
             [workflow.memory :as mem]
             [workflow.protocol :as protocol]
-            [workflow.api :as wf]))
+            [workflow.api :as wf])
+  (:import java.util.concurrent.Executors
+           java.util.concurrent.ThreadFactory
+           java.util.Date))
 
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]
@@ -176,11 +179,31 @@
               (let [sleep-duration 100
                     res            (protocol/sleep sch sleep-duration #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3})
                     start          (System/nanoTime)
-                    _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}] (async/<!! queue)))
+                    _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}]
+                                          (loop [x (async/<!! queue)]
+                                            (if (= #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" (first x))
+                                              x
+                                              (recur (async/<!! queue))))))
                     end            (System/nanoTime)
                     delta-ms       (double (/ (- end start) 1000000))]
                 (is (>= delta-ms sleep-duration)
-                    "execution is deferred by at least the given amount"))))
+                    "execution is deferred by at least the given amount")
+                (async/>!! replies {:test 3}))))
+          (testing "[exceptional cases]"
+            (testing "sleeping in the past still runs"
+              (let [sleep-duration -1000
+                    res            (protocol/sleep sch sleep-duration #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4})
+                    start          (System/nanoTime)
+                    _              (is (= [#uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4}]
+                                          (loop [x (async/<!! queue)]
+                                            (if (= #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" (first x))
+                                              x
+                                              (recur (async/<!! queue))))))
+                    end            (System/nanoTime)
+                    delta-ms       (double 50)]
+                (is (>= 100 delta-ms)
+                    "execution is deferred by at least the given amount")
+                (async/>!! replies {:test 4}))))
           (finally
             (api/close sch)))))))
 

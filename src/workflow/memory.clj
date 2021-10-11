@@ -78,34 +78,43 @@
 (defn make-execution-persistence [statem-persistence]
   (->ExecutionPersistence (atom {}) statem-persistence))
 
+(defn- save-task* [state timestamp execution-id options]
+  (let [task-id (str "task_" (UUID/randomUUID))]
+    (swap! state assoc task-id {:task/id                task-id
+                                :task/execution-id      execution-id
+                                :task/execution-options options
+                                :task/start-after       timestamp})
+    task-id))
+
+(defn- runnable-tasks* [state now]
+  (let [s @state]
+    (swap! state (fn [s] (into {}
+                               (remove (fn [[_ v]] (:task/complete? v)))
+                               #_
+                               (filter (fn [[_ v]] (if-let [after (:task/start-after v)]
+                                                     (.isAfter (.plusMillis (.toInstant ^Date now) -1000)
+                                                               (.toInstant ^Date after))
+                                                     true)))
+                               s)))
+    (keep #(let [after (:task/start-after %)]
+             (when (.isAfter (.toInstant ^Date now)
+                             (.toInstant ^Date after))
+               (select-keys % [:task/id :task/execution-id :task/execution-options :task/response :task/complete?])))
+          (vals s))))
+
+(defn- complete-task* [state task-id reply]
+  (swap! state (fn [s r] (if (contains? (s task-id) :task/response)
+                           (update s task-id merge {:task/response  r
+                                                    :task/complete? true})
+                           s))
+         reply)
+  true)
+
 (defrecord SchedulerPersistence [state]
   p/SchedulerPersistence
-  (save-task [_ timestamp execution-id options]
-    (let [task-id (UUID/randomUUID)]
-      (swap! state assoc task-id {:task/id                task-id
-                                  :task/execution-id      execution-id
-                                  :task/execution-options options
-                                  :task/start-after       timestamp})
-      task-id))
-  (runnable-tasks [_ now]
-
-    (let [s @state]
-      (swap! state (fn [s] (into {}
-                                 (filter (fn [[_ v]] (if-let [after (:task/start-after v)]
-                                                       (<= (.getSeconds (Duration/between (Instant/now) (.toInstant ^Date after))) 60)
-                                                       true)))
-                                 s)))
-      (keep #(let [after (:task/start-after %)]
-               (when (and after (.isAfter (.toInstant ^Date after)
-                                          (.toInstant ^Date now)))
-                 (select-keys % [:task/id :task/execution-id :task/execution-options :task/response])))
-            (vals s))))
-  (complete-task [_ task-id reply]
-    (swap! state (fn [s r] (if (contains? (s task-id) :task/response)
-                             (assoc-in s [task-id :task/response] r)
-                             s))
-           reply)
-    true))
+  (save-task [_ timestamp execution-id options] (save-task* state timestamp execution-id options))
+  (runnable-tasks [_ now] (runnable-tasks* state now))
+  (complete-task [_ task-id reply] (complete-task* state task-id reply)))
 
 (defn make-scheduler-persistence []
   (->SchedulerPersistence (atom {})))

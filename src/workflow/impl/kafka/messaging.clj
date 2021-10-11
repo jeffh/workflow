@@ -16,6 +16,7 @@
            org.apache.kafka.clients.producer.MockProducer
            org.apache.kafka.clients.producer.Partitioner
            org.apache.kafka.clients.producer.ProducerRecord
+           org.apache.kafka.clients.producer.RecordMetadata
            org.apache.kafka.clients.consumer.KafkaConsumer
            org.apache.kafka.clients.consumer.MockConsumer
            org.apache.kafka.clients.consumer.ConsumerRecord
@@ -50,6 +51,14 @@
       (value [_] v))))
 
 (defrecord Message [topic key value offset partition timestamp headers])
+
+(defn- RecordMetadata->map [^RecordMetadata rm]
+  (merge {:partition       (.partition rm)
+          :topic           (.topic rm)
+          :key-num-bytes   (.serializedKeySize rm)
+          :value-num-bytes (.serializedValueSize rm)}
+         (when (.hasOffset rm) {:offset (.offset rm)})
+         (when (.hasTimestamp rm) {:timestamp (.timestamp rm)})))
 
 (defn- ProducerRecord->Message [^ProducerRecord record]
   (Message. (.topic record)
@@ -182,15 +191,26 @@
       configuration.
   - headers :: a map of key value pairs where keys are strings, and values are String or bytes
   "
-  ([^Producer producer topic key value] @(.send producer (ProducerRecord. (str topic) key value)))
+  ([^Producer producer topic key value]
+   (future
+     (RecordMetadata->map
+      @(.send producer (ProducerRecord. (str topic) key value)))))
   ([^Producer producer topic key value headers]
-   (let [^Integer partition nil]
-     @(.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))
+   (future
+     (let [^Integer partition nil]
+       (RecordMetadata->map @(.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))))
+  ([^Producer producer topic key value headers ^Integer partition]
+   (future
+     (RecordMetadata->map
+      @(.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers))))))
   ([^Producer producer messages]
-   (let [^Integer partition nil]
-     (doseq [[topic key value headers] messages]
-       (.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))
-   (.flush producer)))
+   (future
+     (let [responses
+           (vec ;; realize
+            (for [[topic key value headers ^Integer partition] messages]
+              (.send producer (ProducerRecord. (str topic) partition key value ^Iterable (map (fn [[k v]] (->header k v)) headers)))))]
+       (.flush producer)
+       (mapv #(RecordMetadata->map (deref %)) responses)))))
 
 #_(defn send-tx!
     "Sends a sequence of messages through a given producer.
@@ -225,8 +245,10 @@
         (.abortTransaction producer)))
     (.flush producer))
 
-(defn ^MockConsumer ->mock-consumer [{:keys [offset-reset]}]
-  (MockConsumer. (OffsetResetStrategy/valueOf (name offset-reset))))
+(defn ^MockConsumer ->mock-consumer
+  ([_group-id config] (->mock-consumer config)) ;; emulate the ->consumer interface
+  ([options] (MockConsumer. (OffsetResetStrategy/valueOf (string/upper-case (str (or (get options "auto.offset.reset")
+                                                                                     "earliest")))))))
 
 (defn mock-consumer-set-poll-exception [^MockConsumer mc exception]
   (.schedulePollTask mc (fn [] (.setPollException mc exception))))
@@ -337,6 +359,13 @@
   java.lang.AutoCloseable
   (close [_] (closer)))
 
+(defn TopicPartition->map [^TopicPartition tp]
+  {:topic     (.topic tp)
+   :partition (.partition tp)})
+
+(defn consumer-assignment [^KafkaConsumer consumer]
+  (into #{} (map TopicPartition->map (.assignment consumer))))
+
 (defn consumer-loop [^KafkaConsumer consumer closed-atom {:keys [poll-duration
                                                                  topics
                                                                  value-deserializer
@@ -360,11 +389,10 @@
       (subscribe consumer topics)
       (while (not @closed-atom)
         (let [records (poll consumer poll-duration)
-              tmp     (processing-method msg-processor
-                                         failed-message-handler
-                                         records)]
-          (->> (not-empty tmp)
-               (commit-offsets consumer))))
+              commits (processing-method msg-processor
+                                             failed-message-handler
+                                             records)]
+          (commit-offsets consumer (not-empty commits))))
       (catch WakeupException e nil)
       (catch Exception e
         (if exception-handler
@@ -387,7 +415,8 @@
                                    processing-method
                                    process-message
                                    failed-message-handler
-                                   exception-handler]
+                                   exception-handler
+                                   thread-name]
                             :or   {poll-duration      10000
                                    processing-method  optimistic-processor
                                    value-deserializer nippy/fast-thaw}
@@ -402,7 +431,8 @@
           "value-deserializer must be a function")
   (let [closed (atom false)
         t      (doto (Thread. (fn [] (consumer-loop consumer closed options))
-                              (format "backgrounded-consumer[%s]" (string/join "," topics)))
+                              (format "backgrounded-consumer[%s]-%s" (string/join "," topics)
+                                      (str thread-name)))
                  (.start))]
     (Closer.
      (fn []

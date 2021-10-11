@@ -7,7 +7,9 @@
             [clojure.core.async :as async])
   (:import java.util.Date
            java.util.UUID
-           java.time.Instant))
+           java.time.Instant
+           java.util.concurrent.Executors
+           java.util.concurrent.ExecutorService))
 
 (defn- responses-handler [producer response-topic persistence handler open-tasks msg]
   (let [task (:value msg)]
@@ -26,24 +28,25 @@
                ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
                (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res))))))
 
-(defn- execution-handler [producer persistence handler open-tasks msg]
+(defn- execution-handler [producer persistence handler open-tasks ^ExecutorService pool msg]
   ;; limitations:
   ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
-  (let [task (:value msg)]
-    (condp = (:task/op task)
-      :complete (when-let [ch (get @open-tasks (:task/id task))]
-                  (async/put! ch (:task/response task))
-                  (async/close! ch)
-                  (swap! open-tasks dissoc (:task/id task)))
-      :run (when-let [f (first @handler)]
-             (let [res     (f (:task/execution-id task) (:task/execution-options task))
-                   enc-res (nippy/fast-freeze (assoc task
-                                                     :task/op :complete
-                                                     :task/response res))]
-               (protocol/complete-task persistence (:task/id task) res)
-              ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
-               (when-let [response-topic (:task/reply-topic task)]
-                 (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))
+  (.submit
+   pool
+   ^Runnable
+   (fn []
+     (let [task (:value msg)]
+       ;; (println (format "ExecutionHandler(%s)" (pr-str task)))
+       (condp = (:task/op task)
+         :run (when-let [f (first @handler)]
+                (let [res     (f (:task/execution-id task) (:task/execution-options task))
+                      enc-res (nippy/fast-freeze (assoc task
+                                                        :task/op :complete
+                                                        :task/response res))]
+                  (protocol/complete-task persistence (:task/id task) res)
+                  ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
+                  (when-let [response-topic (:task/reply-topic task)]
+                    (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))))
 
 (defn- message-handler [producer persistence handler open-tasks msg]
   ;; limitations:
@@ -51,89 +54,104 @@
   (let [task (:value msg)]
     (condp = (:task/op task)
       :complete (when-let [ch (get @open-tasks (:task/id task))]
-                  (async/put! ch (:task/response task))
+                  ;; (println (format "MessageHandler(%s, %s)" (pr-str task) (pr-str ch)))
+                  (when-let [res (:task/response task)] (async/put! ch res))
                   (async/close! ch)
-                  (swap! open-tasks dissoc (:task/id task)))
-      :run (when-let [f (first @handler)]
-             (let [res     (f (:task/execution-id task) (:task/execution-options task))
-                   enc-res (nippy/fast-freeze (assoc task
-                                                     :task/op :complete
-                                                     :task/response res))]
-               (protocol/complete-task persistence (:task/id task) res)
-              ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
-               (when-let [response-topic (:task/reply-topic task)]
-                 (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))
+                  (swap! open-tasks dissoc (:task/id task))))))
 
-(defrecord Scheduler [producer responses-worker handler-consumer-fn execution-topic response-topic persistence handler open-tasks close-poller]
+(defmacro ^:private try? [& body]
+  `(try ~@body (catch Throwable t# nil)))
+
+(defrecord Scheduler [producer responses-worker handler-consumer-fn executions-topic responses-topic persistence handler open-tasks close-poller name-hint ^ExecutorService executor create-poll-task]
   protocol/Scheduler
-  (sleep-to [_ timestamp execution-id options]
+  (sleep-to [this timestamp execution-id options]
     (let [task-id (protocol/save-task persistence timestamp execution-id options)]
-              (swap! open-tasks assoc task-id (async/chan 1))
-              (nil? task-id)))
+      (swap! open-tasks assoc task-id (async/chan 1))
+      (nil? task-id)))
   (enqueue-execution [_ execution-id options]
     (let [reply   (when (::wf/reply? options) (async/chan 1))
           options (dissoc options ::wf/reply?)
           task-id (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
       (when reply (swap! open-tasks assoc task-id reply))
-      (messaging/send! producer execution-topic (str execution-id)
+      (messaging/send! producer executions-topic (str execution-id)
                        (nippy/fast-freeze (merge {:task/op                :run
                                                   :task/id                task-id
                                                   :task/execution-id      execution-id
                                                   :task/execution-options options}
-                                                 (when reply {:task/reply-topic response-topic}))))
+                                                 (when reply {:task/reply-topic responses-topic}))))
       reply))
   (register-execution-handler [_ f]
     (if (and (nil? (second @handler)) f)
-      (reset! handler [f (messaging/backgrounded-consumer
-                          (handler-consumer-fn)
-                          {:topics          #{execution-topic}
-                           :process-message (partial execution-handler producer persistence handler open-tasks)})])
+      (let [c (handler-consumer-fn)]
+        (reset! handler [f (messaging/backgrounded-consumer
+                            c
+                            {:topics          #{executions-topic}
+                             :thread-name     name-hint
+                             :process-message (partial execution-handler producer persistence handler open-tasks executor)})]))
       (swap! handler update 0 f))
-    (prn "handler" @handler)
     true)
-  java.io.Closeable
-  (close [_]
-    (close-poller)
-    (when-let [worker (second @handler)] (messaging/close! worker))
-    (messaging/close! responses-worker)
-    (messaging/close! producer)))
+  protocol/Connection
+  (open* [this]
+    (when close-poller (try? (close-poller)))
+    (assoc this :close-poller (create-poll-task)))
+  (close* [this]
+    (try? (close-poller))
+    (try? (when-let [worker (second @handler)] (messaging/close! worker)))
+    (try? (messaging/close! responses-worker))
+    (try? (messaging/close! producer))
+    (try? (.shutdown executor))
+    (assoc this
+           :close-poller nil
+           :worker nil
+           :responses-worker nil
+           :producer nil)))
 
 ;; TODO(jeff): rename status-poll-interval-ms to something more API-consumer centric - perhaps recovery-poll-interval-ms?
 (defn make-scheduler* [sch-persistence producer responses-consumer make-handler-consumer-fn
-                       {:keys [executions-topic responses-topic
-                               status-poll-interval-ms exception-handler]
+                       {:keys [executions-topic responses-topic name
+                               status-poll-interval-ms exception-handler
+                               executor]
                         :or   {executions-topic        "workflow-executions"
                                responses-topic         "workflow-responses"
                                status-poll-interval-ms 5000}}]
-  (let [open-tasks       (atom {})
+  (assert (>= status-poll-interval-ms 100)
+          "Low poll intervals are not allows for recovery fetches (since it introduces bugs)")
+  (let [executor         (cond
+                           (instance? ExecutorService executor) executor
+                           (= 1 executor)                       (Executors/newSingleThreadExecutor)
+                           (integer? executor)                  (Executors/newFixedThreadPool (int executor))
+                           (nil? executor)                      (Executors/newCachedThreadPool)
+                           :else                                (throw (IllegalArgumentException. "Invalid executor, should be nil, integer, or an ExecutorService instance")))
+        open-tasks       (atom {})
         handler          (atom nil)
         responses-worker (messaging/backgrounded-consumer
                           responses-consumer
                           {:topics          #{responses-topic}
+                           :thread-name     name
                            :process-message (partial message-handler producer sch-persistence handler open-tasks)})
         ;; TODO(jeff): each topic needs its own consumer, response-topic-config needs unique consumer group per every listener
-        cancel-poll-task (protocol/schedule-recurring-local-task!
-                          status-poll-interval-ms status-poll-interval-ms
-                          (fn []
-                            (try
-                              (when-let [open-tasks (not-empty (keys @open-tasks))]
-                                (let [outstanding-tasks (filter (comp (set open-tasks) :task/id)
-                                                                (protocol/runnable-tasks sch-persistence (Date.)))]
-                                  (doseq [t     outstanding-tasks
-                                          :when (nil? (:task/response t))]
-                                    (messaging/send! producer
-                                                     executions-topic
-                                                     (str (:task/execution-id t))
-                                                     (nippy/fast-freeze (assoc t :task/op :run))))))
-                              (catch Throwable t
-                                (if exception-handler
-                                  (exception-handler t)
-                                  (.printStackTrace t))))))]
+        create-poll-task #(protocol/schedule-recurring-local-task!
+                           status-poll-interval-ms status-poll-interval-ms
+                           (fn []
+                             (try
+                               (when-let [open-tasks (not-empty (keys @open-tasks))]
+                                 (let [outstanding-tasks (filter (comp (set open-tasks) :task/id)
+                                                                 (protocol/runnable-tasks sch-persistence (Date.)))]
+                                   (doseq [t     outstanding-tasks
+                                           :when (not (:task/complete? t))]
+                                     (messaging/send! producer
+                                                      executions-topic
+                                                      (str (:task/execution-id t))
+                                                      (nippy/fast-freeze (assoc t :task/op :run))))))
+                               (catch Throwable t
+                                 (if exception-handler
+                                   (exception-handler t)
+                                   (.printStackTrace t))))))]
     (->Scheduler producer responses-worker make-handler-consumer-fn
                  executions-topic responses-topic sch-persistence
-                 handler open-tasks cancel-poll-task)))
+                 handler open-tasks nil name executor create-poll-task)))
 
-(defn make-scheduler [consumer-id persistence {:keys [producer-fn consumer-fn
+(defn make-scheduler [consumer-id persistence {:keys [producer-fn consumer-fn name executor
                                                       producer-options consumer-options status-poll-interval-ms exception-handler
                                                       execution-topic-config response-topic-config]
                                                :or   {status-poll-interval-ms 5000
@@ -159,7 +177,9 @@
                      {:executions-topic        (:name execution-topic-config)
                       :responses-topic         (:name response-topic-config)
                       :status-poll-interval-ms status-poll-interval-ms
-                      :exception-handler       exception-handler})))
+                      :exception-handler       exception-handler
+                      :executor                executor
+                      :name                    name})))
 
 (comment
   (messaging/close! (:scheduler fx))
