@@ -221,13 +221,11 @@
                                                        :states         '{"created"     {:always [{:name  "fulfilled"
                                                                                                   :state "outstanding"}]}
                                                                          "outstanding" {:always  [{:name   "fetched"
-                                                                                                   :invoke {:given                                                                                         #_ {:status 200
-                                                                                                                                                                                                               :body   {:json {:n (rand-int 10)}}}
-                                                                                                            (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}}) :if
-                                                                                                            (<= 200 (:status output) 299)                                                                  :then
-                                                                                                            {:state   "fetched"
-                                                                                                             :context {:response {:n (:n (:json (:body output)))}}}                                        :else
-                                                                                                            {:state "failed"}}}]
+                                                                                                   :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
+                                                                                                            :if    (<= 200 (:status output) 299)
+                                                                                                            :then  {:state   "fetched"
+                                                                                                                    :context {:response {:n (:n (:json (:body output)))}}}
+                                                                                                            :else  {:state "failed"}}}]
                                                                                         :actions {"cancel" {:state "canceled"}}}
                                                                          "failed"      {:always [{:name     "retry"
                                                                                                   :state    "outstanding"
@@ -238,9 +236,9 @@
 
                                                                          "fetched" {:always [{:name    "deliver"
                                                                                               :state   "delivered"
-                                                                                              :when    (> 3 (:n (:response state)))
+                                                                                              :when    (> 3 (:n (:response ctx)))
                                                                                               :context {:response nil
-                                                                                                        :result   (:n (:response state))}}
+                                                                                                        :result   (:n (:response ctx))}}
                                                                                              {:name     "retry"
                                                                                               :state    "outstanding"
                                                                                               :context  {:response nil}
@@ -287,7 +285,7 @@
                                                                                   :state "cart"}]}
                                                            "cart"      {:actions {"add"    {:name    "added"
                                                                                             :state   "cart"
-                                                                                            :context (update-in state [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
+                                                                                            :context (update-in ctx [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
                                                                                   "remove" {:name    "removed"
                                                                                             :state   "cart"
                                                                                             :context (letfn [(sub [a b]
@@ -302,7 +300,7 @@
                                                                                                                        (if (pos? (b ai 0))
                                                                                                                          (recur out (inc i) (update b ai dec))
                                                                                                                          (recur (conj! out ai) (inc i) b)))))))]
-                                                                                                       (update-in state [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
+                                                                                                       (update-in ctx [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
                                                                                   "place"  {:state "submitted"}}}
                                                            "submitted" {:actions {"fraud-approve" {:state "fraud-approved"}
                                                                                   "fraud-reject"  {:state "fraud-rejected"}}}
@@ -312,57 +310,59 @@
                                                            "released"       {:always [{:id     "ship"
                                                                                        :name   "ship"
                                                                                        :invoke {:state-machine ["shipment" 1]
-                                                                                                :input         {:order (:id (:order state))}
+                                                                                                :input         {:order (:id (:order ctx))}
                                                                                                 :success       {:state   "ship-finished"
                                                                                                                 :context {:delivered (:delivered output)}}
                                                                                                 :error         {:state "canceled"}}}]}
                                                            "ship-finished"  {:always [{:name  "fulfilled"
-                                                                                       :when  (:delivered state)
+                                                                                       :when  (:delivered ctx)
                                                                                        :state "shipped"}
                                                                                       {:name  "canceled"
                                                                                        :state "canceled"}]}
                                                            "shipped"        {:end true}
                                                            "canceled"       {:end true}}})
       (wf/save-statem fx #:state-machine{:id             "shipment"
-                                          :version        1
-                                          :start-at       "created"
-                                          :execution-mode "async-throughput"
-                                          :context        '{:id        "S1"
-                                                            :order     (:order input)
-                                                            :delivered false}
-                                          :states         '{"created"     {:always [{:name  "fulfilled"
-                                                                                     :state "outstanding"}]}
-                                                            "outstanding" {:always  [{:id     "fetch"
-                                                                                      :name   "fetched"
-                                                                                      :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                                               :if    (<= 200 (:status output) 299)
-                                                                                               :then  {:state   "fetched"
-                                                                                                       :context {:response {:n (:n (:json (:body output)))}}}
-                                                                                               :else  {:state "failed"}}}]
-                                                                           :actions {"cancel" {:state "canceled"}}}
-                                                            "failed"      {:always [{:name     "retry"
-                                                                                     :state    "outstanding"
-                                                                                     :wait-for {:seconds 5}}]}
+                                         :version        1
+                                         :start-at       "created"
+                                         :execution-mode "async-throughput"
+                                         :context        '{:id        "S1"
+                                                           :order     (:order input)
+                                                           :delivered false}
+                                         :states         '{"created"     {:always [{:name  "fulfilled"
+                                                                                    :state "outstanding"}]}
+                                                           "outstanding" {:always  [{:id     "fetch"
+                                                                                     :name   "fetched"
+                                                                                     :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
+                                                                                              :if    (<= 200 (:status output) 299)
+                                                                                              :then  {:state   "fetched"
+                                                                                                      :context {:response {:n (:n (:json (:body output)))}}}
+                                                                                              :else  {:state "failed"}}}]
+                                                                          :actions {"cancel" {:state "canceled"}}}
+                                                           "failed"      {:always [{:name     "retry"
+                                                                                    :state    "outstanding"
+                                                                                    :wait-for {:seconds 5}}]}
 
-                                                            "canceled" {:end    true
-                                                                        :return {:delivered false}}
+                                                           "canceled" {:end    true
+                                                                       :return {:delivered false}}
 
-                                                            "fetched" {:always [{:name    "deliver"
-                                                                                 :state   "delivered"
-                                                                                 :when    (> 3 (:n (:response state)))
-                                                                                 :context {:response nil
-                                                                                           :result   (:n (:response state))}}
-                                                                                {:name     "retry"
-                                                                                 :state    "outstanding"
-                                                                                 :context  {:response nil}
-                                                                                 :wait-for {:seconds 5}}]}
+                                                           "fetched" {:always [{:name    "deliver"
+                                                                                :state   "delivered"
+                                                                                :when    (> 3 (:n (:response ctx)))
+                                                                                :context {:response nil
+                                                                                          :result   (:n (:response ctx))}}
+                                                                               {:name     "retry"
+                                                                                :state    "outstanding"
+                                                                                :context  {:response nil}
+                                                                                :wait-for {:seconds 5}}]}
 
-                                                            "delivered" {:end    true
-                                                                         :return {:delivered true}}}})
+                                                           "delivered" {:end    true
+                                                                        :return {:delivered true}}}})
 
 
       (p/register-execution-handler fx (wf/create-execution-handler fx))
-      (def out (wf/start fx "order" nil)))
+      (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
+                                                                    {:status 200
+                                                                     :body   (:json-body res)})}})))
     (do
       (wf/trigger fx (second out) {::wf/action "add"
                                    ::wf/reply? true
@@ -396,6 +396,8 @@
                                 :execution/memory])))
          (mapcat #(wf/fetch-execution-history fx (:execution/id %))
                  (wf/executions-for-statem fx "order" {:version :latest})))))
+
+  (wf/fetch-execution fx #uuid "31551037-05ba-45e5-b9f6-c5bc302c49eb" :latest)
 
   (clojure.pprint/print-table
    (sort-by (juxt :execution/step-started-at :execution/state-machine-id :execution/version)

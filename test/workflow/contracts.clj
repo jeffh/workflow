@@ -4,6 +4,7 @@
             [workflow.api :as api]
             [workflow.memory :as mem]
             [workflow.protocol :as protocol]
+            [workflow.interpreters :refer [->Sandboxed]]
             [workflow.api :as wf])
   (:import java.util.concurrent.Executors
            java.util.concurrent.ThreadFactory
@@ -207,6 +208,101 @@
           (finally
             (api/close sch)))))))
 
+(defmacro letlocals
+  "Allows local definition of variables that's useful for side-effectful sequences of code.
+
+  (letlocal
+   (bind x 1)
+   (bind y 2)
+   (identity y)
+   (+ x y))
+
+  ;; => (let [x 1 y 2 _ (identity y)] (+ x y))
+  "
+  [& forms]
+  (let [tmpvar   (gensym "_")
+        bindings (mapcat
+                  identity
+                  (for [f (butlast forms)]
+                    (or (when (seq? f)
+                          (let [sym (first f)]
+                            (when (= 'bind sym)
+                              [(second f) (nth f 2)])))
+                        [tmpvar f])))]
+    `(let ~(vec bindings)
+       ~(last forms))))
+
+(defn- print-executions [fx]
+  (clojure.pprint/print-table
+   (sort-by
+    (juxt :t)
+    (map (fn [sm]
+           (merge {:execution/event-name ""}
+                  (-> sm
+                      (assoc :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
+                                 (:execution/version sm)])
+                      (select-keys
+                       [:execution/state-machine-id
+                        :execution/state
+                        :execution/status
+                        :execution/event-name
+                        :execution/comment
+                        :execution/input
+                        :t
+                        :execution/error
+                        :execution/memory])
+                      (cond-> (get-in sm [:execution/input ::api/io]) (assoc-in [:execution/input ::api/io] '...)))))
+         (mapcat #(api/fetch-execution-history fx (:execution/id %))
+                 (api/executions-for-statem fx "order" {:version :latest}))))))
+
+(defn effects [doc-name fx-options]
+  (testing doc-name
+    (testing "is well integrated (tests against http io)"
+      (let [fx (api/open (api/effects (merge
+                                       {:interpreter (->Sandboxed)}
+                                       (fx-options))))]
+        (testing "running a sample order"
+          (try
+            (is (:ok @(api/save-statem fx order-statem)))
+            (is (:ok @(api/save-statem fx shipment-statem)))
+            (api/register-execution-handler fx (api/create-execution-handler fx))
+            (letlocals
+             (bind [ok execution-id finished-execution] (api/start fx "order" {::api/io '{"http.request.json" (fn [method uri res]
+                                                                                                                {:status 200
+                                                                                                                 :body   {:json {:n (get (:json-body res) "n")}}})}}))
+             (is ok "Failed to start 'order' execution")
+             (bind res-ch (api/trigger fx execution-id {::api/action "add"
+                                                        ::api/reply? true
+                                                        :sku         "bns12"
+                                                        :qty         1}))
+             (is res-ch "expected reply channel")
+             (is (not (nil? (async/<!! res-ch)))
+                 "failed to add to order")
+             (bind res-ch (api/trigger fx execution-id {::api/action "place"}))
+             (is (nil? res-ch))
+             (bind res-ch (api/trigger fx execution-id {::api/action "fraud-approve"
+                                                        ::api/reply? true}))
+             (is res-ch)
+             (is (not (nil? (async/<!! res-ch))))
+             (testing "verify execution completes"
+               (letlocals
+                (bind final-execution (loop [attempts 0
+                                             e        (api/fetch-execution fx execution-id :latest)]
+                                        (if (or (#{"failed" "finished"} (:execution/status e))
+                                                (< 10 attempts))
+                                          e
+                                          (do
+                                            (Thread/sleep 5000)
+                                            (recur (inc attempts) (api/fetch-execution fx execution-id :latest))))))
+                (when-not (= "finished" (:execution/status final-execution))
+                  (print-executions fx))
+                (is (= "finished" (:execution/status final-execution))
+                    (format "expected execution to complete successfully:\n%s"
+                            (pr-str final-execution)))
+                (print-executions fx))))
+            (finally
+              (api/close fx))))))))
+
 (def ^:private execution-started
   #:execution{:comment               "Enqueued for execution"
               :event-name            nil
@@ -215,6 +311,7 @@
               :version               1
               :state-machine-id      "order"
               :state-machine-version 1
+              :io                    nil
               :mode                  "async-throughput"
               :status                "queued"
               :state                 "create"
@@ -250,6 +347,7 @@
               :version               2
               :state-machine-id      "order"
               :state-machine-version 1
+              :io                    nil
               :mode                  "async-throughput"
               :status                "running"
               :state                 "create"
@@ -271,7 +369,7 @@
               :dispatch-result       nil
               :dispatch-by-input     nil})
 
-(def ^:private order-statem
+(def order-statem
   #:state-machine{:id             "order"
                   :version        1
                   :start-at       "create"
@@ -281,7 +379,7 @@
                                                                 :state "cart"}]}
                                     "cart"           {:actions {"add"    {:name    "added"
                                                                           :state   "cart"
-                                                                          :context (update-in state [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
+                                                                          :context (update-in ctx [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
                                                                 "remove" {:name    "removed"
                                                                           :state   "cart"
                                                                           :context (letfn [(sub [a b]
@@ -296,7 +394,7 @@
                                                                                                      (if (pos? (b ai 0))
                                                                                                        (recur out (inc i) (update b ai dec))
                                                                                                        (recur (conj! out ai) (inc i) b)))))))]
-                                                                                     (update-in state [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
+                                                                                     (update-in ctx [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
                                                                 "place"  {:state "submitted"}}}
                                     "submitted"      {:actions {"fraud-approve" {:state "fraud-approved"}
                                                                 "fraud-reject"  {:state "fraud-rejected"}}}
@@ -306,19 +404,19 @@
                                     "released"       {:always [{:id     "ship"
                                                                 :name   "ship"
                                                                 :invoke {:state-machine ["shipment" 1]
-                                                                         :input         {:order (:id (:order state))}
+                                                                         :input         {:order (:id (:order ctx))}
                                                                          :success       {:state   "ship-finished"
                                                                                          :context {:delivered (:delivered output)}}
                                                                          :error         {:state "canceled"}}}]}
                                     "ship-finished"  {:always [{:name  "fulfilled"
-                                                                :when  (:delivered state)
+                                                                :when  (:delivered ctx)
                                                                 :state "shipped"}
                                                                {:name  "canceled"
                                                                 :state "canceled"}]}
                                     "shipped"        {:end true}
                                     "canceled"       {:end true}}})
 
-(def ^:private shipment-statem
+(def shipment-statem
   #:state-machine{:id             "shipment"
                   :version        1
                   :start-at       "created"
@@ -328,13 +426,13 @@
                                     :delivered false}
                   :states         '{"created"     {:always [{:name  "fulfilled"
                                                              :state "outstanding"}]}
-                                    "outstanding" {:always  [{:name   "fetched"
+                                    "outstanding" {:always  [{:id     "fetch"
+                                                              :name   "fetched"
                                                               :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                       :if    (<= 200 (:status output) 299)
+                                                                       :if    (and (:status output) (<= 200 (:status output) 299))
                                                                        :then  {:state   "fetched"
                                                                                :context {:response {:n (:n (:json (:body output)))}}}
-                                                                       :else
-                                                                       {:state "failed"}}}]
+                                                                       :else  {:state "failed"}}}]
                                                    :actions {"cancel" {:state "canceled"}}}
                                     "failed"      {:always [{:name     "retry"
                                                              :state    "outstanding"
@@ -345,9 +443,9 @@
 
                                     "fetched" {:always [{:name    "deliver"
                                                          :state   "delivered"
-                                                         :when    (> 3 (:n (:response state)))
+                                                         :when    (> 3 (:n (:response ctx)))
                                                          :context {:response nil
-                                                                   :result   (:n (:response state))}}
+                                                                   :result   (:n (:response ctx))}}
                                                         {:name     "retry"
                                                          :state    "outstanding"
                                                          :context  {:response nil}
@@ -355,4 +453,5 @@
 
                                     "delivered" {:end    true
                                                  :return {:delivered true}}}})
+
 

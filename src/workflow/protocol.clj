@@ -123,8 +123,8 @@
   (enqueue-execution [_ execution options] (enqueue-execution scheduler execution options))
   (register-execution-handler [_ f] (register-execution-handler scheduler f))
   MachineInterpreter
-  (evaluate-expr [_ expr io state input output] (evaluate-expr interp expr io state input output)))
+  (evaluate-expr [_ expr io context input output] (evaluate-expr interp expr io context input output)))
 
 (defn eval-action
-  ([expr fx io state input] (evaluate-expr fx expr io state input ::nothing))
-  ([expr fx io state input output] (evaluate-expr fx expr io state input output)))
+  ([expr fx io context input] (evaluate-expr fx expr io context input ::nothing))
+  ([expr fx io context input output] (evaluate-expr fx expr io context input output)))

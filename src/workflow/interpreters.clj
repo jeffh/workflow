@@ -59,45 +59,28 @@
      ]
    (keys eval-bindings)))
 
-(defn eval-action [edn-expr io state input output]
-  (letfn [(const-state [form]
-            (cond (map? form)        (if-let [state (:state form)]
-                                       {:failed? (not (string? state))
-                                        :value   state}
-                                       (reduce (fn [a [k v]] (or a (const-state v))) nil form))
-                  (sequential? form) (reduce #(or %1 (const-state %2)) nil form)
-                  ;; TODO: handle assoc-in, assoc, update-in, update actions
-                  :else              nil))]
-    (let [{:keys [failed? value]} (const-state edn-expr)]
-      (assert (not failed?)
-              (format ":state field must be a constant value and not dynamically computed: %s" (pr-str value)))))
-  (if (fn? edn-expr)
-    (edn-expr (merge {:io    io
-                      :state state
-                      :input input}
-                     (when (not= ::p/nothing output)
-                       {:output output})))
-    (try
-      (sci/eval-string (pr-str edn-expr)
-                       {:allow       (-> eval-allows
-                                         (into eval-nonterminating)
-                                         (into '[io state input output]))
-                        :realize-max 100
-                        :namespaces  {}
-                        :load-fn     (constantly nil)
-                        :bindings    (merge eval-bindings
-                                            {'io    io
-                                             'state state
-                                             'input input}
-                                            (when (not= ::p/nothing output)
-                                              {'output output}))})
-      (catch Exception e
-        (throw (ex-info "Failed to interpret action" {:code edn-expr :output? (not= ::p/nothing output)} e))))))
+(defn eval-action [edn-expr io context input output]
+  (try
+    (sci/eval-string (pr-str edn-expr)
+                     {:allow       (-> eval-allows
+                                       (into eval-nonterminating)
+                                       (into '[io ctx input output]))
+                      :realize-max 100
+                      :namespaces  {}
+                      :load-fn     (constantly nil)
+                      :bindings    (merge eval-bindings
+                                          {'io    io
+                                           'ctx   context
+                                           'input input}
+                                          (when (not= ::p/nothing output)
+                                            {'output output}))})
+    (catch Exception e
+      (throw (ex-info "Failed to interpret action" {:code edn-expr :output? (not= ::p/nothing output)} e)))))
 
-(defn clj-eval-action [edn-expr io state input output]
+(defn clj-eval-action [edn-expr io context input output]
   (try
     (eval `(let [~'io    ~io
-                 ~'state ~state
+                 ~'ctx   ~context
                  ~'input ~input]
              ~(if (= ::p/nothing output)
                 edn-expr
@@ -108,8 +91,8 @@
 
 (defrecord Sandboxed []
   p/MachineInterpreter
-  (evaluate-expr [_ expr io state input output] (eval-action expr io state input output)))
+  (evaluate-expr [_ expr io context input output] (eval-action expr io context input output)))
 
 (defrecord Naive []
   p/MachineInterpreter
-  (evaluate-expr [_ expr io state input output] (clj-eval-action expr io state input output)))
+  (evaluate-expr [_ expr io context input output] (clj-eval-action expr io context input output)))

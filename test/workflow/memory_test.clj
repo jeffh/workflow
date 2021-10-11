@@ -1,5 +1,6 @@
 (ns workflow.memory-test
   (:require [clojure.test :refer [deftest]]
+            [workflow.api :as api]
             [workflow.memory :as mem]
             [workflow.contracts :as contracts]))
 
@@ -11,3 +12,11 @@
 
 (deftest scheduler-contract
   (contracts/scheduler "Memory Scheduler" mem/make-scheduler))
+
+(deftest e2e
+  (contracts/effects "Memory Execution"
+                     (fn []
+                       (let [statem (mem/make-statem-persistence)]
+                         {:statem    statem
+                          :execution (mem/make-execution-persistence statem)
+                          :scheduler (mem/make-scheduler)}))))

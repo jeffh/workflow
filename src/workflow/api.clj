@@ -57,26 +57,36 @@
 
 ;; QUESTION(jeff): is this better to put in the protocols?
 (defn io
-  "Processes external io events. Also takes in consideration the any state machine overrides."
+  "Processes external io events. Also takes in consideration the any execution overrides."
   [op & args]
-  (let [op (get (:state-machine/io *state-machine*) op op)]
-    (if (fn? op)
-      (apply op args)
-      (apply protocol/io op args))))
+  (if-let [code (get (:execution/io *execution*) op)]
+    (let [res (eval-action code *fx* io (:execution/memory *execution*) nil)]
+      (if (fn? res)
+        (apply res args)
+        res))
+    (apply protocol/io op args)))
+
 (defn- no-io
   [op & args]
   (throw (ex-info "io is not allowed in this location" {:op op :args args})))
 
 (declare run-sync-execution step-execution)
 (defn start
+  "Starts an execution.
+
+  Note: It isn't safe to for input to come from untrusted sources.
+   - Recommended: validate input values before passing through this function.
+   - Less Good Alternative: pass the untrusted input as a key in input.
+  "
   ([fx state-machine-id] (start fx state-machine-id (UUID/randomUUID) nil nil))
   ([fx state-machine-id input] (start fx state-machine-id (UUID/randomUUID) nil input))
-  ([fx state-machine-id initial-state input] (start fx state-machine-id (UUID/randomUUID) initial-state input))
-  ([fx state-machine-id execution-id initial-state input]
+  ([fx state-machine-id initial-context input] (start fx state-machine-id (UUID/randomUUID) initial-context input))
+  ([fx state-machine-id execution-id initial-context input]
    (if-let [state-machine (s/debug-assert-statem
                            (if (vector? state-machine-id)
                              (fetch-statem fx (first state-machine-id) (second state-machine-id))
-                             (fetch-statem fx state-machine-id :latest)))]
+                             (fetch-statem fx state-machine-id :latest))
+                           {:wanted-statem state-machine-id})]
      (let [now                   (now!)
            sync?                 (= "sync" (:state-machine/execution-mode state-machine))
            execution             {:execution/comment               (if sync? "Immediately starting execution" "Enqueued for execution")
@@ -86,16 +96,17 @@
                                   :execution/version               1
                                   :execution/state-machine-id      (:state-machine/id state-machine)
                                   :execution/state-machine-version (:state-machine/version state-machine)
+                                  :execution/io                    (or (::io input) (:state-machine/io state-machine))
                                   :execution/mode                  (:state-machine/execution-mode state-machine)
                                   :execution/status                (if sync? "running" "queued")
                                   :execution/state                 (:state-machine/start-at state-machine)
-                                  :execution/memory                (if (nil? initial-state)
+                                  :execution/memory                (if (nil? initial-context)
                                                                      (eval-action (:state-machine/context state-machine)
                                                                                   fx
                                                                                   no-io
                                                                                   nil
                                                                                   input)
-                                                                     initial-state)
+                                                                     initial-context)
                                   :execution/input                 input
                                   :execution/enqueued-at           now
                                   :execution/started-at            (when sync? now)
@@ -118,7 +129,16 @@
          (begin fx state-machine execution input)))
      [false nil {:error ::state-machine-not-found}])))
 
-(defn trigger [fx execution-id input]
+(defn trigger
+  "Triggers a state machine to follow a specific transition.
+
+  Note: It isn't safe to for input to come from untrusted sources.
+   - Recommended: validate input values before passing through this function.
+   - Less Good Alternative: pass the untrusted input as a key in input.
+  "
+  [fx execution-id input]
+  (when-not (::action input)
+    (throw (IllegalArgumentException. (format "::action is missing from input: %s" (pr-str input)))))
   (if-let [execution (s/debug-assert-execution (fetch-execution fx execution-id :latest))]
     (enqueue-execution fx (:execution/id execution) input)
     {:error ::execution-not-found}))
@@ -405,7 +425,8 @@
                                          e-result         (start fx state-machine-id sub-eid
                                                                  (:state wait-for)
                                                                  (merge (:input wait-for)
-                                                                        {::return [(:execution/id execution) aid]}))]
+                                                                        {::io     (:execution/io execution)
+                                                                         ::return [(:execution/id execution) aid]}))]
                                      (assert aid "Action needs a name or id")
                                      {:execution/dispatch-result   e-result
                                       :execution/dispatch-by-input input})

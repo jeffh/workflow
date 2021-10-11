@@ -42,7 +42,8 @@
    [:state-machine/id string?]
    [:state-machine/version integer?]
    [:state-machine/execution-mode string?]
-   [:state-machine/context Code]
+   [:state-machine/context {:optional true} Code]
+   [:state-machine/io {:optional true} [:map-of any? Code]]
    [:state-machine/states [:map-of
                            State
                            [:map
@@ -62,6 +63,7 @@
    [:execution/version integer?]
    [:execution/state-machine-id string?]
    [:execution/state-machine-version integer?]
+   [:execution/io [:maybe [:map-of any? Code]]]
    [:execution/mode string?]
    [:execution/status [:enum "queued" "running" "failed" "waiting" "paused" "finished" "failed-resumable"]]
    [:execution/state [:maybe State]] ;; nil indicates terminated
@@ -106,12 +108,22 @@
                   (pr-str e)))
   e)
 
-(defn assert-statem [s]
-  (assert (valid-statem? s)
-          (format "Invalid statem: %s; Input: %s"
-                  (pr-str (err-for-statem s))
-                  (pr-str s)))
-  s)
+(defn assert-statem
+  ([s]
+   (assert (valid-statem? s)
+           (format "Invalid statem: %s; Input: %s"
+                   (pr-str (err-for-statem s))
+                   (pr-str s)))
+   s)
+  ([s md]
+   (assert (valid-statem? s)
+           (format "Invalid statem: %s; Input: %s; %s"
+                   (pr-str (err-for-statem s))
+                   (pr-str s)
+                   (if md
+                     (pr-str md)
+                     "")))
+   s))
 
 ;;;;;;;;;;
 
@@ -119,5 +131,6 @@
 
 (defn debug-assert-execution [e]
   (when debug (assert-execution e)))
-(defn debug-assert-statem [s]
-  (when debug (assert-statem s)))
+(defn debug-assert-statem
+  ([s] (when debug (assert-statem s)))
+  ([s md] (when debug (assert-statem s md))))
