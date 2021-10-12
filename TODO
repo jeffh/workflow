@@ -1,3 +1,12 @@
+[ ] Features
+  [ ] "Catch" exceptions
+  [ ] Trigger a step of a state machine from another state machine
+  [ ] Streaming execution to another state machine
+  [~] Retry failed executions -- NOTE(jeff): this can be done in a state machine or part of "catch" exceptions
+  [ ] Upgrading Executions to new State Machine versions
+  [ ] Consider Input handling?
+    [ ] Queues
+    [ ] HTTP
 [ ] Backends
   [ ] Schedulers / Queuing
     [x] Kafka
@@ -31,9 +40,6 @@
   [ ] Static Analysis
 [ ] Extensions
   [ ] Custom serialization?
-[ ] Consider Input handling?
-  [ ] Queues
-  [ ] HTTP
 [ ] Tooling
   [ ] Tracing
   [ ] Logging
@@ -42,4 +48,4 @@
 [ ] Explore
   [ ] Cross-Compile
   [ ] ClojureScript / Frontend Web
-	[ ]  How does this work with UIs?
+  [ ] How does this work with UIs?
