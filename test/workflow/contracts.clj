@@ -257,7 +257,7 @@
 
 (defn effects [doc-name fx-options]
   (testing doc-name
-    (testing "is well integrated (tests against http io)"
+    (testing "is well integrated"
       (let [fx (api/open (api/effects (merge
                                        {:interpreter (->Sandboxed)}
                                        (fx-options))))]
@@ -288,7 +288,7 @@
                (letlocals
                 (bind final-execution (loop [attempts 0
                                              e        (api/fetch-execution fx execution-id :latest)]
-                                        (if (or (#{"failed" "finished"} (:execution/status e))
+                                        (if (or (#{"failed" "failed-resumable" "finished"} (:execution/status e))
                                                 (< 10 attempts))
                                           e
                                           (do
@@ -299,7 +299,7 @@
                 (is (= "finished" (:execution/status final-execution))
                     (format "expected execution to complete successfully:\n%s"
                             (pr-str final-execution)))
-                (print-executions fx))))
+                #_(print-executions fx))))
             (finally
               (api/close fx))))))))
 

@@ -1,12 +1,12 @@
 # Workflow
 
-Leveraging state machines as a faster way to build web services.
+Leveraging state machines as a faster way to build web services. Requires Java 11+
 
 ## Problem
 
 Typical web software development needs to handle the following concerns:
 
- - Implementing new features
+ - Implementing new features (hopefully obvious)
  - Reliability of operation & implementation, including upgrades/migrations
  - Observability/Explainability of the system to technical and non-technical people
 

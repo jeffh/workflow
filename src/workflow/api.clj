@@ -654,7 +654,6 @@
   ([fx] (create-execution-handler fx nil))
   ([fx {:keys [executor-name]}]
    (fn handler [eid input]
-     (prn "RUN" eid)
      (let [executor-name (or executor-name (.getName (Thread/currentThread)))
            [execution input]
            (loop [attempts 1]
