@@ -1,0 +1,5 @@
+{:deps     {net.jeffhui/workflow-core {:local/root "../workflow-core"}
+            com.taoensso/nippy                {:mvn/version "3.1.1"}
+            org.apache.kafka/kafka-clients    {:mvn/version "3.0.0"}
+            org.apache.kafka/kafka-streams    {:mvn/version "3.0.0"}}
+ :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]}

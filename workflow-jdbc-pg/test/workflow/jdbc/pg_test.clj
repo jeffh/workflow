@@ -1,4 +1,4 @@
-(ns workflow.pg-test
+(ns workflow.jdbc.pg-test
   (:require [clojure.test :refer [deftest]]
             [workflow.jdbc.pg :as pg]
             [workflow.contracts :as contracts]

@@ -59,6 +59,7 @@
 	state TEXT,
 	memory BYTEA,
 	input BYTEA,
+  io BYTEA,
 	enqueued_at BIGINT,
 	started_at BIGINT,
 	finished_at BIGINT,
@@ -104,6 +105,7 @@
                     :state                 :execution/state
                     :memory                :execution/memory
                     :input                 :execution/input
+                    :io                    :execution/io
                     :enqueued_at           :execution/enqueued-at
                     :started_at            :execution/started-at
                     :finished_at           :execution/finished-at
@@ -127,6 +129,7 @@
      (map #(select-keys % (vals field->key)))
      (map #(update % :execution/memory nippy/fast-thaw))
      (map #(update % :execution/input nippy/fast-thaw))
+     (map #(update % :execution/io nippy/fast-thaw))
      (map #(update % :execution/error nippy/fast-thaw))
      (map #(update % :execution/wait-for nippy/fast-thaw))
      (map #(update % :execution/return-target nippy/fast-thaw))
@@ -153,11 +156,11 @@
   (with-open [conn (jdbc/get-connection ds)]
     (try
       (record jdbc/execute! conn ["INSERT INTO workflow_executions (
-      id, version, state_machine_id, state_machine_version, mode, status, state, memory, input,
+      id, version, state_machine_id, state_machine_version, mode, status, state, memory, input, io,
       enqueued_at, started_at, finished_at, failed_at, step_started_at, step_ended_at,
       user_started_at, user_ended_at, error, wait_for, return_target, return_data, comment, event_name, event_data,
       dispatch_result, dispatch_by_input, end_state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                   (:execution/id execution)
                                   (:execution/version execution)
                                   (:execution/state-machine-id execution)
@@ -167,6 +170,7 @@
                                   (:execution/state execution)
                                   (nippy/fast-freeze (:execution/memory execution))
                                   (nippy/fast-freeze (:execution/input execution))
+                                  (nippy/fast-freeze (:execution/io execution))
                                   (:execution/enqueued-at execution)
                                   (:execution/started-at execution)
                                   (:execution/finished-at execution)

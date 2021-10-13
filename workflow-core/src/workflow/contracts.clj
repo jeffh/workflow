@@ -2,13 +2,8 @@
   (:require [clojure.test :refer [testing is]]
             [clojure.core.async :as async]
             [workflow.api :as api]
-            [workflow.memory :as mem]
             [workflow.protocol :as protocol]
-            [workflow.interpreters :refer [->Sandboxed]]
-            [workflow.api :as wf])
-  (:import java.util.concurrent.Executors
-           java.util.concurrent.ThreadFactory
-           java.util.Date))
+            [workflow.interpreters :refer [->Sandboxed]]))
 
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]
