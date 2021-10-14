@@ -201,6 +201,8 @@
                     "execution is deferred by at least the given amount")
                 (async/>!! replies {:test 4}))))
           (finally
+            (async/close! queue)
+            (async/close! replies)
             (api/close sch)))))))
 
 (defmacro letlocals

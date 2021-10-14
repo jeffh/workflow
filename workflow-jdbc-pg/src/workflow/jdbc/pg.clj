@@ -7,7 +7,8 @@
             [next.jdbc.result-set :as rs]
             [next.jdbc.connection :as connection])
   (:import com.zaxxer.hikari.HikariDataSource
-           java.util.concurrent.Executors))
+           java.util.concurrent.Executors
+           java.util.concurrent.ExecutorService))
 
 (defn- record
   ([f ds parameterized-query]
@@ -206,17 +207,18 @@
               (throw pe))
             (throw pe)))))))
 
-(defrecord Persistence [db-spec ^javax.sql.DataSource ds pool]
+(defrecord Persistence [db-spec ^javax.sql.DataSource ds ^ExecutorService pool]
   p/Connection
   (open* [this]
-    (when ds (.close ds))
+    (when ds (.close ^java.io.Closeable ds))
     (let [ds (connection/->pool HikariDataSource db-spec)]
       (ensure-statem-table ds)
       (ensure-executions-table ds)
-      (assoc this :ds ds)))
+      (assoc this :ds ds :pool (Executors/newSingleThreadExecutor (p/thread-factory (constantly "wf-jdbc-pg-persistence"))))))
   (close* [this]
-    (when ds (.close ds))
-    (assoc this :ds nil))
+    (when ds (.close ^java.io.Closeable ds))
+    (when pool (.shutdown pool))
+    (assoc this :ds nil :pool nil))
   p/StateMachinePersistence
   (fetch-statem [_ state-machine-id version]
     (with-open [conn (jdbc/get-connection db-spec)]
@@ -228,6 +230,7 @@
   (save-statem [_ state-machine]
     (.submit
      pool
+     ^Callable
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
          (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
@@ -284,10 +287,10 @@ ORDER BY e.started_at DESC;"
             (db->execution-txfm)
             (jdbc/plan conn ["SELECT * FROM workflow_executions WHERE id = ? ORDER BY version ASC;" execution-id]))))
   (save-execution [_ execution]
-    (.submit pool (fn [] (save-execution ds execution)))))
+    (.submit pool ^Callable (fn [] (save-execution ds execution)))))
 
 (defn make-persistence [db-spec]
-  (->Persistence db-spec nil (Executors/newSingleThreadExecutor) #_(Executors/newFixedThreadPool 8)))
+  (->Persistence db-spec nil nil))
 
 (comment
 

@@ -158,3 +158,17 @@ Here's some extra things to look into:
  - How to maintain high performance, despite more data being generated.
  - How to minimize the amount of need of escape hatches
  - How to share state machine implementations
+
+
+# Development
+
+Running test:
+
+```bash
+# needs services running
+cd test-services
+docker up -d
+cd ..
+# run tests
+clojure -X:test
+```

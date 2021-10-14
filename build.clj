@@ -6,9 +6,10 @@
 (def version (format "0.1.%s" (b/git-count-revs nil)))
 
 (defn run-tests [opts]
-  (-> opts
-      (assoc :lib lib :version version)
-      (bb/run-tests)))
+  (let [{:keys [exit]} (b/process {:command-args ["clojure" "-X:test"]})]
+    (when-not (zero? exit)
+      (throw (ex-info "Test failed" {}))))
+  opts)
 
 (defn clean [opts]
   (-> opts
@@ -18,14 +19,14 @@
 (defn ci [opts]
   (-> opts
       (assoc :lib lib :version version)
-      (bb/run-tests)
+      (run-tests)
       (bb/clean)
       (bb/jar)))
 
 (defn uberjar [opts]
   (-> opts
       (assoc :lib lib :version version)
-      (bb/run-tests)
+      (run-tests)
       (bb/clean)
       (bb/uber)))
 

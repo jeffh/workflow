@@ -2,11 +2,22 @@
   (:import java.util.Date
            java.time.Instant
            java.util.concurrent.Executors
+           java.util.concurrent.ThreadFactory
            java.util.concurrent.ScheduledExecutorService
            java.util.concurrent.TimeUnit))
 
+(defn ^ThreadFactory thread-factory
+  ([namer-fn] (thread-factory namer-fn nil))
+  ([namer-fn {:keys [daemon?]}]
+   (let [i (atom 1)]
+     (reify ThreadFactory
+       (newThread [_ r]
+         (let [t (Thread. r (namer-fn (swap! i inc)))]
+           (when-not (nil? daemon?) (.setDaemon t (boolean daemon?)))
+           t))))))
+
 (defonce ^:private local-scheduler
-  (delay (Executors/newScheduledThreadPool 1)))
+  (delay (Executors/newScheduledThreadPool 1 (thread-factory (constantly "wf-local-scheduler") {:daemon? true}))))
 
 (defn schedule-recurring-local-task! [initial-ms interval-ms f]
   (let [fut (.scheduleAtFixedRate ^ScheduledExecutorService @local-scheduler f (long initial-ms) (long interval-ms) TimeUnit/MILLISECONDS)]

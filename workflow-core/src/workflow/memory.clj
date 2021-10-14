@@ -143,8 +143,15 @@
                       (async/>!! reply res))
                     (async/close! reply)))
                 (recur))))))))
-  java.io.Closeable
-  (close [_] (reset! handler nil)))
+  p/Connection
+  (open* [this]
+    (assoc this
+           :work-ch (or work-ch (async/chan 64))
+           :handler (atom {})))
+  (close* [this]
+    (reset! handler nil)
+    (async/close! work-ch)
+    (assoc this :work-ch nil)))
 
 (defn make-scheduler
   ([] (make-scheduler 64))
