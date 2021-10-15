@@ -122,7 +122,7 @@
 (defrecord Scheduler [work-ch handler]
   p/Scheduler
   (sleep-to [_ timestamp execution-id options]
-    (async/go (async/<! (async/timeout (.toMillis (Duration/between (Instant/now) (.toInstant timestamp)))))
+    (async/go (async/<! (async/timeout (inc (.toMillis (Duration/between (Instant/now) (.toInstant timestamp))))))
               (async/>! work-ch [execution-id (dissoc options ::wf/reply?) nil]))
     true)
   (enqueue-execution [_ execution-id options]
