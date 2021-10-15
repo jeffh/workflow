@@ -1,6 +1,5 @@
-(ns workflow.interpreters
-  (:require [workflow.protocol :as p]
-            [workflow.api :as wf]
+(ns net.jeffhui.workflow.interpreters
+  (:require [net.jeffhui.workflow.protocol :as p]
             [clojure.string :as string]
             [clojure.edn :as edn]
             [sci.core :as sci]

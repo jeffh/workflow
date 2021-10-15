@@ -23,7 +23,7 @@ issues, instead of trying to address them directly:
  - Processes: Specifications that are independent from code. There is a gap
    understanding how a system work for technical and non-technical people that
    should be narrowed.
- 
+
 Nothing is wrong with those above efforts, but this project attempts to imagine
 something different.
 
@@ -35,9 +35,9 @@ better understand problems to solve instead of how to execute effectively.
 **Note: Nothing here is a stable API. Things are subject to change at this point in time.**
 
 ```clojure
-(require '[workflow.interpreters :refer [->Sandboxed]]) ;; Uses Sci, alternative is ->Naive which uses eval
-(require '[workflow.api :as api])
-(require '[workflow.memory :as mem]) ;; in-memory implementation
+(require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed]]) ;; Uses Sci, alternative is ->Naive which uses eval
+(require '[net.jeffhui.workflow.api :as api])
+(require '[net.jeffhui.workflow.memory :as mem]) ;; in-memory implementation
 (require '[clojure.core.async :as async])
 (defn make []
 (let [statem (mem/make-statem-persistence)]

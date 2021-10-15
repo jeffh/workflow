@@ -1,6 +1,6 @@
-(ns workflow.jdbc.pg
-  (:require [workflow.protocol :as p]
-            [workflow.api :as wf]
+(ns net.jeffhui.workflow.jdbc.pg
+  (:require [net.jeffhui.workflow.protocol :as p]
+            [net.jeffhui.workflow.api :as wf]
             [taoensso.nippy :as nippy]
             [clojure.set :as set]
             [next.jdbc :as jdbc]
@@ -349,8 +349,8 @@ ORDER BY e.started_at DESC;"
 
   (p/close fx)
   (do
-    (require '[workflow.interpreters :refer [->Sandboxed ->Naive]]
-             '[workflow.memory :as mem]
+    (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]]
+             '[net.jeffhui.workflow.memory :as mem]
              '[clojure.core.async :as async]
              :reload)
     (defn make

@@ -1,5 +1,5 @@
-(ns workflow.io.http
-  (:require [workflow.protocol :as protocol]
+(ns net.jeffhui.workflow.io.http
+  (:require [net.jeffhui.workflow.protocol :as protocol]
             [clojure.string :as string]
             [jsonista.core :as json])
   (:import java.net.http.HttpClient$Version

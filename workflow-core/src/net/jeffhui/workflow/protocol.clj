@@ -1,4 +1,4 @@
-(ns workflow.protocol
+(ns net.jeffhui.workflow.protocol
   (:import java.util.Date
            java.time.Instant
            java.util.concurrent.Executors

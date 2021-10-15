@@ -1,9 +1,9 @@
-(ns workflow.contracts
+(ns net.jeffhui.workflow.contracts
   (:require [clojure.test :refer [testing is]]
             [clojure.core.async :as async]
-            [workflow.api :as api]
-            [workflow.protocol :as protocol]
-            [workflow.interpreters :refer [->Sandboxed]]))
+            [net.jeffhui.workflow.api :as api]
+            [net.jeffhui.workflow.protocol :as protocol]
+            [net.jeffhui.workflow.interpreters :refer [->Sandboxed]]))
 
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]

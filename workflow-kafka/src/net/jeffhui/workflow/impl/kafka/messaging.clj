@@ -1,4 +1,4 @@
-(ns workflow.impl.kafka.messaging
+(ns net.jeffhui.workflow.impl.kafka.messaging
   (:require [taoensso.nippy :as nippy]
             [clojure.string :as string])
   (:import org.apache.kafka.common.serialization.Serdes

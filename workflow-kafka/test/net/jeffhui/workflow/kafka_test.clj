@@ -1,8 +1,8 @@
-(ns workflow.kafka-test
-  (:require [workflow.kafka :as kafka]
-            [workflow.memory :as mem]
-            [workflow.contracts :as contracts]
-            [workflow.impl.kafka.messaging :as messaging]
+(ns net.jeffhui.workflow.kafka-test
+  (:require [net.jeffhui.workflow.kafka :as kafka]
+            [net.jeffhui.workflow.memory :as mem]
+            [net.jeffhui.workflow.contracts :as contracts]
+            [net.jeffhui.workflow.impl.kafka.messaging :as messaging]
             [clojure.test :refer [deftest]])
   (:import java.util.UUID))
 

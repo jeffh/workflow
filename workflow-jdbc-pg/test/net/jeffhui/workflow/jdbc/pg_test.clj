@@ -1,7 +1,7 @@
-(ns workflow.jdbc.pg-test
+(ns net.jeffhui.workflow.jdbc.pg-test
   (:require [clojure.test :refer [deftest]]
-            [workflow.jdbc.pg :as pg]
-            [workflow.contracts :as contracts]
+            [net.jeffhui.workflow.jdbc.pg :as pg]
+            [net.jeffhui.workflow.contracts :as contracts]
             [next.jdbc :as jdbc]
             next.jdbc.date-time))
 

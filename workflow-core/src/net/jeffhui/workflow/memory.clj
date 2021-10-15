@@ -1,6 +1,6 @@
-(ns workflow.memory
-  (:require [workflow.api :as wf]
-            [workflow.protocol :as p]
+(ns net.jeffhui.workflow.memory
+  (:require [net.jeffhui.workflow.api :as wf]
+            [net.jeffhui.workflow.protocol :as p]
             [clojure.core.async :as async])
   (:import java.time.Instant
            java.time.Duration
@@ -160,7 +160,7 @@
 (comment
   (do
     (do
-      (require '[workflow.interpreters :refer [->Sandboxed ->Naive]])
+      (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]])
       (defn make
         ([] (let [statem (make-statem-persistence)]
               (wf/effects {:statem      statem
@@ -270,7 +270,7 @@
 
   (do
     (do
-      (require '[workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
+      (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
       (defn make
         ([] (let [statem (make-statem-persistence)]
               (wf/effects {:statem      statem

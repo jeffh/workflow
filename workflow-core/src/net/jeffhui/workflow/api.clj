@@ -1,8 +1,8 @@
-(ns workflow.api
-  (:require [workflow.protocol :refer [sleep sleep-to enqueue-execution executor eval-action] :as protocol]
-            [workflow.schema :as s]
+(ns net.jeffhui.workflow.api
+  (:require [net.jeffhui.workflow.protocol :refer [sleep sleep-to enqueue-execution executor eval-action] :as protocol]
+            [net.jeffhui.workflow.schema :as s]
             ;; for multimethod implementations
-            workflow.io.http)
+            net.jeffhui.workflow.io.http)
   (:import java.util.UUID
            java.util.concurrent.CompletableFuture
            java.util.function.Supplier

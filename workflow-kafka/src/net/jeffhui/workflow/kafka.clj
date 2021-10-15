@@ -1,8 +1,8 @@
-(ns workflow.kafka
-  (:require [workflow.protocol :as protocol]
-            [workflow.impl.kafka.messaging :as messaging]
-            [workflow.memory :as mem]
-            [workflow.api :as wf]
+(ns net.jeffhui.workflow.kafka
+  (:require [net.jeffhui.workflow.protocol :as protocol]
+            [net.jeffhui.workflow.impl.kafka.messaging :as messaging]
+            [net.jeffhui.workflow.memory :as mem]
+            [net.jeffhui.workflow.api :as wf]
             [taoensso.nippy :as nippy]
             [clojure.core.async :as async])
   (:import java.util.Date
@@ -173,7 +173,7 @@
 
   (do
     (do
-      (require '[workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
+      (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
       (defn make [consumer-id options]
         (let [statem (mem/make-statem-persistence)]
           (wf/effects {:statem      statem

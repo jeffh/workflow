@@ -1,4 +1,4 @@
-(ns workflow.schema
+(ns net.jeffhui.workflow.schema
   (:require [malli.core :as m]
             [malli.error :as me]))
 

@@ -1,8 +1,7 @@
-(ns workflow.memory-test
+(ns net.jeffhui.workflow.memory-test
   (:require [clojure.test :refer [deftest]]
-            [workflow.api :as api]
-            [workflow.memory :as mem]
-            [workflow.contracts :as contracts]))
+            [net.jeffhui.workflow.memory :as mem]
+            [net.jeffhui.workflow.contracts :as contracts]))
 
 (deftest statem-persistence-contract
   (contracts/statem-persistence "Memory Statem Persistence" mem/make-statem-persistence))
