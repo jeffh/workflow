@@ -1,3 +1,12 @@
+[ ] Cleanup
+  [ ] Do transitions need IDs?
+  [ ] Is it worth for transitions to have names?
+  [ ] Remove :execution/event-metadata
+  [ ] Remove :execution/comment
+[ ] Organization
+  [x] Namespacing to more unique reverse domain
+  [x] Merge :end true and :return <Code>
+  [ ] Smaller dependencies
 [ ] Features
   [ ] "Catch" exceptions
   [ ] Trigger a step of a state machine from another state machine
@@ -7,6 +16,8 @@
   [ ] Consider Input handling?
     [ ] Queues
     [ ] HTTP
+  [ ] Canceling execution
+  [ ] Manually stepping through an execution?
 [ ] Backends
   [ ] Schedulers / Queuing
     [x] Kafka
@@ -26,7 +37,7 @@
     [ ] GCP Equivalents?
     [ ] Azure Equivalents?
     [ ] HornetQ?
-[ ] Visualizations to export / supprt
+[ ] Visualizations to export / support
   [ ] Flow Charts
   [ ] Sequence Diagrams
   [ ] Visualization via State Machine
