@@ -1,4 +1,4 @@
-{:deps     {net.jeffhui/workflow-core {:local/root "../workflow-core"}
+{:deps     {net.jeffhui/workflow-core         {:local/root "../workflow-core"}
             com.taoensso/nippy                {:mvn/version "3.1.1"}
             com.github.seancorfield/next.jdbc {:mvn/version "1.2.724"}
             com.zaxxer/HikariCP               {:mvn/version "5.0.0"}
