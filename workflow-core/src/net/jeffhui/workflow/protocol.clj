@@ -136,6 +136,7 @@
   MachineInterpreter
   (evaluate-expr [_ expr io context input output] (evaluate-expr interp expr io context input output)))
 
+;; TODO(jeff): move expr to between io & context
 (defn eval-action
   ([expr fx io context input] (evaluate-expr fx expr io context input ::nothing))
   ([expr fx io context input output] (evaluate-expr fx expr io context input output)))

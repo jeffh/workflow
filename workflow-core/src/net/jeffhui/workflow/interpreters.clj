@@ -31,7 +31,7 @@
 
 (def eval-allows
   (into
-   '[let if cond and or not
+   '[let if cond and or not seq
      persistent! transient conj! disj! assoc! dissoc!
      > >= = < <= not= zero? pos? neg? even? odd? true? false? nil?
      -> ->> cond-> as-> cond->> some-> some->> comp partial juxt fnil
@@ -58,21 +58,27 @@
      ]
    (keys eval-bindings)))
 
+(def ^:private allowed
+  (-> eval-allows
+      (into eval-nonterminating)
+      (into '[io ctx input output])))
+
+(def ^:private options
+  {:allow       allowed
+   :realize-max 100
+   :namespaces  {}
+   :load-fn     (constantly nil)})
+
 (defn eval-action [edn-expr io context input output]
   (try
     (sci/eval-string (pr-str edn-expr)
-                     {:allow       (-> eval-allows
-                                       (into eval-nonterminating)
-                                       (into '[io ctx input output]))
-                      :realize-max 100
-                      :namespaces  {}
-                      :load-fn     (constantly nil)
-                      :bindings    (merge eval-bindings
-                                          {'io    io
-                                           'ctx   context
-                                           'input input}
-                                          (when (not= ::p/nothing output)
-                                            {'output output}))})
+                     (assoc options :bindings
+                            (merge eval-bindings
+                                   {'io    io
+                                    'ctx   context
+                                    'input input}
+                                   (when (not= ::p/nothing output)
+                                     {'output output}))))
     (catch Exception e
       (throw (ex-info "Failed to interpret action" {:code edn-expr :output? (not= ::p/nothing output)} e)))))
 

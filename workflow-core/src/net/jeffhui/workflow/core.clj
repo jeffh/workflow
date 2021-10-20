@@ -3,13 +3,16 @@
   (:require [clojure.string :as string]
             [clojure.set :as set]))
 
+;; TODO(jeff): Error should show code snippet executed along with exception
+
 (defmacro ^:private assert-arg [expr msg & args]
   `(when-not ~expr
      (throw (IllegalArgumentException. (format ~msg ~@args)))))
 
 (defn empty-execution
-  "Creates an execution that has some initial values"
-  [{:keys [execution-id state-machine initial-context input]}]
+  "Creates an execution that has some initial values. These are fundamental
+   values needed to step through an execution"
+  [{:keys [execution-id state-machine initial-context input return-to]}]
   {:execution/id                    execution-id
    :execution/version               1
    :execution/state-machine-id      (:state-machine/id state-machine)
@@ -18,9 +21,10 @@
    :execution/pause-state           "ready"
    :execution/memory                initial-context
    :execution/input                 input
-   :execution/pause-memory          nil})
+   :execution/pause-memory          nil
+   :execution/return-to             return-to})
 
-(defrecord Result [execution effects actions error])
+(defrecord Result [execution effects transitions error])
 
 (defmacro ^:private try? [execution action body]
   `(let [a# ~action]
@@ -35,14 +39,13 @@
                            :action    a#
                            :throwable (Throwable->map t#)})))))
 
-
 (declare next-execution)
 (defn step-execution
   "Makes one logical step of the execution. This means the execution runs until
    it needs to run an effect or needs to wait for input.
 
   Types:
-    Returns {:execution next-execution, :effects [{:op :kw, :args ..., :complete-ref resume-id}], :actions [...], :error ...}
+    Returns {:execution next-execution, :effects [{:op :kw, :args ..., :complete-ref resume-id}], :transitions [...], :error ...}
       next-execution will have pause-state of #{\"ready\" \"wait\" \"await-input\" \"finished\"}
         - \"ready\" indicates next-execution can be called again, it may or may
           not advance based on conditions of the actions.
@@ -61,13 +64,14 @@
         NOTE: this contract is unstable and may change from version to version
 
         Current ops that are required:
-          :execution/start {:state-machine-id .., :execution-id ..., :input ..., async? bool} -> {:ok bool, :execution/id ...}
-          :execution/step  {:execution-id ..., :action ... :input ..., async? bool} -> {:ok bool, ...}
-          :invoke/io       {:input ..., :expr ...} -> ...
-          :sleep/seconds   {:seconds Int} -> ...
-          :sleep/timestamp {:timestamp Inst} -> ...
+          :execution/start  {:state-machine-id .., :execution-id ..., :input ..., async? bool} -> {:ok bool, :execution/id ...}
+          :execution/step   {:execution-id ..., :action ... :input ..., :async? Maybe(bool)} -> {:ok bool, ...}
+          :execution/return {...} -> Void
+          :invoke/io        {:input ..., :expr ...} -> ...
+          :sleep/seconds    {:seconds Int} -> ...
+          :sleep/timestamp  {:timestamp Inst} -> ...
 
-      actions are the sequence of action-ids of the state-machine definition that
+      transitions are the sequence of [action-id execution] that indicates what path was taken
       produces the associated execution.
 
     Cofx:
@@ -129,10 +133,22 @@
         - \"wait\" indicates this execution is waiting for completion of the return effect(s).
           After effects run, the ::resume key should be provided with a vector of completions.
           ::resume => {:id resume-id, :return fx-return-value}
+        - \"finished\" indicates this execution has terminated. Futher attempts
+          to step will be unchanged.
 
       effects are a vector of side effects to initiate. They may optionally have
         a complete-ref if the execution is awaiting for a return value for the given
         effect.
+
+        NOTE: this contract is unstable and may change from version to version
+
+        Current ops that are required:
+          :execution/start  {:state-machine-id .., :execution-id ..., :input ..., async? bool} -> {:ok bool, :execution/id ..., :error ...}
+          :execution/step   {:execution-id ..., :action ... :input ..., :async? Maybe(bool)} -> {:ok bool, :error ..., ...}
+          :execution/return {...} -> Void
+          :invoke/io        {:input ..., :expr ...} -> {:ok bool, :error ..., :value ....}
+          :sleep/seconds    {:seconds Int} -> {:ok bool, :error ...}
+          :sleep/timestamp  {:timestamp Inst} -> {:ok bool, :error ...}
 
     Cofx:
       eval-expr!           => Code context input -> EDN
@@ -160,9 +176,21 @@
      (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
                                                                                       :possible-states (keys states)}))
      (vary-meta
-       (if (or (contains? state-node :return)
-               (= "finished" (:execution/pause-state execution)))
-         (->Result (assoc execution :execution/pause-state "finished") nil nil nil)
+      (if (contains? state-node :return)
+         (if (= "finished" (:execution/pause-state execution))
+           (->Result execution nil nil nil)
+           (->Result (assoc (next-ver execution) :execution/pause-state "finished")
+                     (vec
+                      (remove nil?
+                              [{:op   :execution/return
+                                :args {:result (:return state-node)}}
+                               (when-let [return-to (:execution/return-to execution)]
+                                 (let [[execution-id action-name] return-to]
+                                   {:op   :execution/step
+                                    :args {:execution-id execution-id
+                                           :action       action-name
+                                           :input        (:return state-node)}}))]))
+                     nil nil))
          (if resume
            (cond
              (not= (:execution/pause-state "wait"))
@@ -240,7 +268,7 @@
                                  next-data        (if (:context action)
                                                     (eval-expr! (:context action) data input)
                                                     data)
-                                 state-machine-id (eval-expr! (:state-machine-id invoke) data input)
+                                 state-machine-id (eval-expr! (:state-machine invoke) data input)
                                  statem-input     (merge (:input invoke)
                                                          (when-let [eio (:execution/io execution)] {::io eio})
                                                          (when async? {::return [(:execution/id execution) aid]}))]
@@ -299,7 +327,7 @@
                                                                         :resumers       {rid {:then (select-keys invoke [:state :context])}}}})
                                        [{:op           :invoke/io
                                          :args         {:input input
-                                                        :expr  (:io effect)}
+                                                        :expr  effect}
                                          :complete-ref rid}]
                                        [(:id action)]
                                        nil))

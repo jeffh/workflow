@@ -1,8 +1,11 @@
 (ns net.jeffhui.workflow.api
   (:require [net.jeffhui.workflow.protocol :refer [sleep sleep-to enqueue-execution executor eval-action] :as protocol]
+            [net.jeffhui.workflow.core :as core]
             [net.jeffhui.workflow.schema :as s]
             ;; for multimethod implementations
-            net.jeffhui.workflow.io.http)
+            net.jeffhui.workflow.io.http
+            [clojure.core.async :as async]
+            [clojure.set :as set])
   (:import java.util.UUID
            java.util.concurrent.CompletableFuture
            java.util.function.Supplier
@@ -70,7 +73,27 @@
   [op & args]
   (throw (ex-info "io is not allowed in this location" {:op op :args args})))
 
-(declare run-sync-execution step-execution)
+(defn empty-execution [{:keys [execution-id state-machine initial-context input now return-to] :as options}]
+  (let [now   (or now (now!))
+        mode  (:state-machine/execution-mode state-machine)
+        sync? (= mode "sync")]
+    (merge
+     (core/empty-execution (assoc options :return-to (or return-to (::return input))))
+     {:execution/comment           (if sync? "Immediately starting execution" "Enqueued for execution")
+      :execution/mode              mode
+      :execution/enqueued-at       now
+      :execution/started-at        (when sync? now)
+      :execution/finished-at       nil
+      :execution/failed-at         nil
+      :execution/step-started-at   (when sync? now)
+      :execution/step-ended-at     nil
+      :execution/user-started-at   nil
+      :execution/user-ended-at     nil
+      :execution/pending-effects   nil
+      :execution/completed-effects nil
+      :execution/error             nil})))
+
+(declare run-sync-execution step-execution!)
 (defn start
   "Starts an execution.
 
@@ -88,41 +111,17 @@
                              (fetch-statem fx state-machine-id :latest))
                            {:wanted-statem state-machine-id})]
      (let [now                   (now!)
-           sync?                 (= "sync" (:state-machine/execution-mode state-machine))
-           execution             {:execution/comment               (if sync? "Immediately starting execution" "Enqueued for execution")
-                                  :execution/event-name            nil
-                                  :execution/event-data            nil
-                                  :execution/id                    execution-id
-                                  :execution/version               1
-                                  :execution/state-machine-id      (:state-machine/id state-machine)
-                                  :execution/state-machine-version (:state-machine/version state-machine)
-                                  :execution/io                    (or (::io input) (:state-machine/io state-machine))
-                                  :execution/mode                  (:state-machine/execution-mode state-machine)
-                                  :execution/status                (if sync? "running" "queued")
-                                  :execution/state                 (:state-machine/start-at state-machine)
-                                  :execution/memory                (if (nil? initial-context)
-                                                                     (eval-action (:state-machine/context state-machine)
-                                                                                  fx
-                                                                                  no-io
-                                                                                  nil
-                                                                                  input)
-                                                                     initial-context)
-                                  :execution/input                 input
-                                  :execution/enqueued-at           now
-                                  :execution/started-at            (when sync? now)
-                                  :execution/finished-at           nil
-                                  :execution/failed-at             nil
-                                  :execution/step-started-at       (when sync? now)
-                                  :execution/step-ended-at         nil
-                                  :execution/user-started-at       nil
-                                  :execution/user-ended-at         nil
-                                  :execution/error                 nil
-                                  :execution/return-target         (::return input)
-                                  :execution/wait-for              nil
-                                  :execution/return-data           nil
-                                  :execution/end-state             nil
-                                  :execution/dispatch-by-input     nil
-                                  :execution/dispatch-result       nil}
+           execution             (empty-execution {:execution-id    execution-id
+                                                   :state-machine   state-machine
+                                                   :initial-context (if (nil? initial-context)
+                                                                      (eval-action (:state-machine/context state-machine)
+                                                                                   fx
+                                                                                   no-io
+                                                                                   nil
+                                                                                   input)
+                                                                      initial-context)
+                                                   :input           input
+                                                   :now             now})
            {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
        (if error
          [false nil {:error error}]
@@ -141,7 +140,7 @@
     (throw (IllegalArgumentException. (format "::action is missing from input: %s" (pr-str input)))))
   (if-let [execution (s/debug-assert-execution (fetch-execution fx execution-id :latest))]
     (enqueue-execution fx (:execution/id execution) input)
-    {:error ::execution-not-found}))
+    (throw (ex-info "execution not found" {:execution/id execution-id}))))
 
 (defn- timed-run* [timeout-in-msec f]
   (-> (CompletableFuture/supplyAsync (reify Supplier (get [_] (f))))
@@ -149,7 +148,10 @@
       (.join)))
 
 (defmacro ^:private timed-run [timeout-in-msec body]
-  `(timed-run* ~timeout-in-msec (fn [] ~body)))
+  `(let [t# ~timeout-in-msec]
+     (if (and t# (pos? t#))
+       (timed-run* t# (fn [] ~body))
+       ~body)))
 
 (defn- completed-execution? [execution]
   (let [s (:execution/status execution)]
@@ -163,9 +165,6 @@
                                          :execution/comment         (format "Resuming execution (%s) on %s"
                                                                             (:execution/state execution)
                                                                             executor-name)
-                                         :execution/event-data      nil
-                                         :execution/event-name      nil
-                                         :execution/status          "running"
                                          :execution/started-at      (or (:execution/started-at execution) now)
                                          :execution/error           nil
                                          :execution/failed-at       nil
@@ -190,9 +189,7 @@
                                (merge execution {:execution/comment       "Error running step"
                                                  :execution/version       (inc (:execution/version execution))
                                                  :execution/error         err
-                                                 :execution/status        "failed"
                                                  :execution/step-ended-at now
-                                                 :execution/finished-at   now
                                                  :execution/failed-at     now}))]
             execution'
             (do
@@ -206,7 +203,7 @@
          (or
           (::action input)
           (seq (:always node))
-          (:end node)))))
+          (contains? node :return)))))
 
 (defn- maybe-return-execution! [fx execution]
   (when (#{"failed" "finished"} (:execution/status execution))
@@ -217,110 +214,51 @@
                                 ::cause  {:execution [eid (:execution/status execution)]
                                           :result         (:execution/return-data execution)}}))))))
 
+(defn- random-uuid [] (UUID/randomUUID))
+(defn- make-cofx [fx io]
+  {:eval-expr!           (fn eval-expr!
+                           ([expr context input] (eval-action expr fx no-io context input))
+                           ([expr context input output] (eval-action expr fx no-io context input output)))
+   :current-time!        now!
+   :random-resume-id!    random-uuid
+   :random-execution-id! random-uuid})
+
 (defn- run-sync-execution
-  "Returns a transducer that manages the database interactions while running
-  executions. Avoids using the execution queue by running executions to
+  "Returns the final transaction. Also manages the database interactions while
+  running executions. Avoids using the execution queue by running executions to
   completion.
 
   Unlike other executions, this is expected to be called synchronously on
   [[start-execution]]. The limitation is the restricted execution time window
-  (30s).
+  (30s is default).
 
   Technically the fastest, since there are no context switches.
   "
-  [fx executor-name state-machine]
-  (comp
-   (remove nil?)
-   (map (fn [[starting-execution input]]
-          (assert (= (:state-machine/id state-machine) (:execution/state-machine-id starting-execution))
-                  (pr-str (:state-machine/id state-machine) (:execution/state-machine-id starting-execution)))
-          (let [timeout (or (:state-machine/timeout-msec state-machine) sync-timeout)
-                latest-execution (atom starting-execution)]
-            (try
-              (timed-run
-               timeout
-               (loop [execution starting-execution]
-                 (let [updated-fields (step-execution fx state-machine execution input)
-                       now            (now!)
-                       entity         (merge execution updated-fields {:execution/step-ended-at now})
-                       tx             (save-execution fx entity)]
-                   (assert (not= "running" (:execution/status entity)))
-                   (reset! latest-execution execution)
-                   (if (can-continue? state-machine entity nil)
-                     (recur (:entity @(acquire-execution fx executor-name entity nil)))
-                     ;; TODO: if we fail to save... is there anything we can do?
-                     (if (and (completed-execution? entity) (not (:ok @tx)))
-                       (throw (ex-info "Failed to save success in execution"
-                                       {:context      entity
-                                        :execution-id (:db/id execution)
-                                        :timestamp    now}))
-                       (do
-                         (maybe-return-execution! fx entity)
-                         entity))))))
-              (catch Exception e
-                (record-exception fx @latest-execution e))))))))
-
-(defn- apply-action [start-time execution action]
-  (let [action   (merge {:name (:state action)}
-                        action)
-        wait-for (:wait-for action)
-        now      (now!)
-        data     (merge (:execution/memory execution) (:context action))]
-    #_(s/assert-serialization-size "state-machine state"
-                                   (select-keys new-state [:context :state]))
-    (cond
-      (:state-machine wait-for)
-      {:execution/comment         "Paused step by invoking state-machine"
-       :execution/event-name      (:name action)
-       :execution/event-data      (:metadata action)
-       :execution/version         (inc (:execution/version execution))
-       :execution/memory          data
-       :execution/status          "waiting"
-       :execution/wait-for        wait-for
-       :execution/user-started-at start-time
-       :execution/user-ended-at   now}
-
-      (:seconds wait-for)
-      {:execution/comment         (str "Finished step by sleeping for " (:seconds wait-for) "s (" (:execution/state execution) " -> " (:state action) ")")
-       :execution/event-name      (:name action)
-       :execution/event-data      (:metadata action)
-       :execution/version         (inc (:execution/version execution))
-       :execution/state           (or (:state action) (:execution/state execution))
-       :execution/memory          data
-       :execution/status          "waiting"
-       :execution/wait-for        wait-for
-       :execution/user-started-at start-time
-       :execution/user-ended-at   now}
-
-      (:timestamp wait-for)
-      {:execution/comment         (str "Finished step by sleeping until timestamp (" (:execution/state execution) " -> " (:state action) ")")
-       :execution/event-name      (:name action)
-       :execution/event-data      (:metadata action)
-       :execution/version         (inc (:execution/version execution))
-       :execution/state           (or (:state action) (:execution/state execution))
-       :execution/memory          data
-       :execution/status          "waiting"
-       :execution/wait-for        wait-for
-       :execution/user-started-at start-time
-       :execution/user-ended-at   now}
-
-      (:state action)
-      (merge {:execution/comment         (str "Finished step (" (:execution/state execution) " -> " (:state action) ")")
-              :execution/event-name      (:name action)
-              :execution/event-data      (:metadata action)
-              :execution/version         (inc (:execution/version execution))
-              :execution/state           (or (:state action) (:execution/state execution))
-              :execution/memory          data
-              :execution/status          "paused"
-              :execution/wait-for        nil
-              :execution/user-started-at start-time
-              :execution/user-ended-at   now})
-
-      :else (throw (ex-info (format "state produced unknown action: %s" (pr-str (:state action)))
-                            {:action            action
-                             :execution-id      (:execution/id execution)
-                             :execution-version (:execution/version execution)
-                             :state             (:execution/state execution)})))))
+  [fx executor-name state-machine starting-execution input]
+  (assert (= (:state-machine/id state-machine) (:execution/state-machine-id starting-execution))
+          (pr-str (:state-machine/id state-machine) (:execution/state-machine-id starting-execution)))
+  (let [timeout          (or (:state-machine/timeout-msec state-machine) sync-timeout)
+        latest-execution (atom starting-execution)
+        cofx             (make-cofx fx io)]
+    (try
+      (timed-run
+       timeout
+       (loop [execution starting-execution
+              input     input]
+         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
+               _                      (reset! latest-execution execution)
+               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               tx                     (save-execution fx next-execution)]
+           (if stop?
+             (if (:ok @tx)
+               next-execution
+               (throw (ex-info "Failed to save execution"
+                               {:context      next-execution
+                                :execution-id (:execution/id execution)})))
+             (recur (:entity @(acquire-execution fx executor-name next-execution nil))
+                    nil)))))
+      (catch Exception e
+        (record-exception fx @latest-execution e)))))
 
 (defmacro with-effects [fx state-machine execution & body]
   `(let [e# ~execution]
@@ -330,165 +268,133 @@
                *execution-id*  (:execution/id e#)]
        ~@body)))
 
-(defn- step-execution
-  ([fx state-machine execution] (step-execution fx state-machine execution nil))
-  ([fx state-machine execution input]
-   (let [estate           (:execution/state execution)
-         action-name      (::action input)
-         node             (get (:state-machine/states state-machine)
-                               estate)
-         cause            (::cause input)
-         resume           (:execution cause)
-         possible-actions (if resume
-                            (remove nil? (conj (filter (comp #{action-name} :id) (:always node))
-                                               (get (:actions node) action-name)))
-                            (not-empty (remove nil? (into (:always node) [(get (:actions node) action-name)]))))
-         data             (:execution/memory execution)
-         start-time       (now!)]
+(defn- should-stop? [execution effects error]
+  (or (boolean error)
+      (and (contains? #{"wait" "await-input" "finished"} (:execution/pause-state execution))
+           (empty? effects)
+           (empty? (:execution/completed-effects execution)))))
+
+(defn- step-execution! [cofx fx state-machine execution input]
+  ;; advances the execution, running side effects if needed
+  (cond
+    ;; we're processing an action that has input from a trigger
+    input
+    (let [{:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                         (set/rename-keys input {::action ::core/action
+                                                                                                 ::resume ::core/resume}))
+          now                                       (now!)
+          next-execution                            (-> (:execution result)
+                                                        (assoc :execution/error error
+                                                               :execution/step-ended-at now
+                                                               :execution/comment "Processed step")
+                                                        (update :execution/pending-effects (fnil into []) effects))
+          stop?                                     (should-stop? next-execution effects error)
+          _ (prn "STOP?" stop?)]
+      [stop? (cond-> next-execution
+               stop? (assoc :execution/finished-at now))])
+
+    ;; we have effects to run
+    ;; TODO(jeff): do we want to batch this, or is it better to do them one-at-a-time and go to persist?
+    (:execution/pending-effects execution)
+    [false ;; now's not the time to stop
      (with-effects fx state-machine execution
-       (if node
-         (if (:end node)
-           (let [now (now!)]
-             (merge {:execution/comment         (str "Finished execution (" (:execution/state execution) ")"
-                                                     (when (:execution/return-target execution)
-                                                       " with return value"))
-                     :execution/event-name      "exited"
-                     :execution/version         (inc (:execution/version execution))
-                     :execution/state           nil
-                     :execution/end-state       (:execution/state execution)
-                     :execution/status          "finished"
-                     :execution/return-data     (when (:return node) (eval-action (:return node) fx no-io data input))
-                     :execution/wait-for        nil
-                     :execution/user-started-at start-time
-                     :execution/user-ended-at   now
-                     :execution/finished-at     now}))
-           (if possible-actions
-             ;; TODO(jeff): support node catching exceptions/errors and routing them through a transition or state
-             (try
-               (loop [possible-actions possible-actions]
-                 (if-let [possible-action (first possible-actions)]
-                   (if (and (not resume) (:when possible-action) (not (eval-action (:when possible-action) fx no-io data input)))
-                     (recur (rest possible-actions))
-                     (let [action (cond
-                                    (:invoke possible-action)
-                                    (let [invoke (:invoke possible-action)]
-                                      (cond
-                                        (and cause (not= (:wait-for possible-action) (:wait-for cause)))
-                                        {:wait-for (:wait-for possible-action)
-                                         :state    (:execution/state execution)}
+       (reduce (fn [execution {:keys [op args complete-ref]}]
+                 (let [ret (try
+                             ;; TODO(jeff): ops should validate args
+                             ;; TODO(jeff): move this case into protocol namespace
+                             (condp = op
+                               :execution/start (let [{:keys [state-machine-id execution-id input async?]}
+                                                      args
 
-                                        resume
-                                        (let [[_ status] resume
-                                              choice     (if (= "finished" status)
-                                                           (:success invoke)
-                                                           (:error invoke))]
-                                          (cond-> choice
-                                            (:context choice) (update :context eval-action fx no-io data (:execution/dispatch-by-input execution) input)))
+                                                      [ok execution-id execution]
+                                                      (start fx state-machine-id execution-id input)]
+                                                  (when async?
+                                                    (merge execution
+                                                           {:error        (if ok nil {:code   :error
+                                                                                      :reason "failed to start"})
+                                                            :execution/id execution-id})))
+                               :execution/step (let [{:keys [execution-id action input async?]}
+                                                     args
 
-                                        (:state-machine invoke)
-                                        (merge {:wait-for (merge (select-keys invoke [:state-machine :success :error])
-                                                                 (when (:input invoke) {:input (eval-action (:input invoke) fx no-io data input)}))
-                                                :state    (:execution/state execution)}
-                                               (when (:name invoke) {:name (:name invoke)}))
+                                                     result
+                                                     (trigger fx execution-id (merge input
+                                                                                     {::action input}
+                                                                                     (when async?
+                                                                                       {::reply? true})))]
+                                                 (when result
+                                                   (async/alt!!
+                                                     (async/timeout 10000) {:error {:code   :timed-out
+                                                                                    :reason "waiting for result to trigger execution has timed out"}}
+                                                     result ([x] x))))
+                               :execution/return nil ;; TODO(jeff): record this?
+                               :invoke/io        (let [{:keys [input expr]} args]
+                                                   (try
+                                                     (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
+                                                       {:value result})
+                                                     (catch Throwable t
+                                                       {:error {:code      :error
+                                                                :input     input
+                                                                :expr      expr
+                                                                :throwable (Throwable->map t)}})))
+                               :sleep/seconds    (let [{:keys [seconds]} args
+                                                       ok                (protocol/sleep fx seconds (:execution/id execution)
+                                                                                         {::resume {:id     complete-ref
+                                                                                                    :return {:sleep seconds}}})]
+                                                   (when-not ok
+                                                     {:error {:code   :io
+                                                              :reason "failed to schedule sleep by seconds"}}))
+                               :sleep/timestamp  (let [{:keys [timestamp]} args
+                                                       ok                  (protocol/sleep-to fx timestamp (:execution/id execution)
+                                                                                              {::resume {:id     complete-ref
+                                                                                                         :return {:timestamp timestamp}}})]
+                                                   (when-not ok
+                                                     {:error {:code   :io
+                                                              :reason "failed to schedule sleep until timestamp"}})))
+                             (catch Throwable t
+                               {:error {:code      :error
+                                        :throwable (Throwable->map t)}}))]
+                   (cond-> (-> execution
+                               (assoc :execution/step-ended-at (now!)
+                                      :execution/comment "Ran effects")
+                               (update :execution/pending-effects next))
+                     complete-ref (update :execution/completed-effects (fnil conj [])
+                                          {::core/resume {:id     complete-ref
+                                                          :return (assoc ret :ok (boolean (:error ret)))}}))))
+               execution
+               (:execution/pending-effects execution)))]
 
-                                        (:given invoke)
-                                        (let [output    (try
-                                                          (eval-action (:given invoke) fx io data input)
-                                                          (catch Throwable t
-                                                            {:error t}))
-                                              condition (if (:if invoke)
-                                                          (eval-action (:if invoke) fx no-io data input output)
-                                                          true)
-                                              clause (if condition (:then invoke) (:else invoke))]
-                                          (cond-> clause
-                                            (:context clause) (update :context eval-action fx no-io data input output)))
+    ;; advance the state machine based on effects that have completed that the
+    ;; execution wants to be notified about success/failure
+    (:execution/completed-effects execution)
+    (let [result                                    (first (:execution/completed-effects execution))
+          {:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                         (set/rename-keys input {::action ::core/action
+                                                                                                 ::resume ::core/resume}))
+          now                                       (now!)
+          next-execution                            (-> (:execution result)
+                                                        (assoc :execution/error error
+                                                               :execution/pending-effects effects
+                                                               :execution/step-ended-at now
+                                                               :execution/comment "Processed effect result")
+                                                        (update :execution/completed-effects (comp not-empty subvec) 1))
+          stop?                                     (should-stop? next-execution effects error)]
+      [stop? (cond-> next-execution
+               stop? (assoc :execution/finished-at now))])
 
-                                        :else
-                                        (throw (ex-info "Unrecognized invocation type" {:invoke invoke}))))
-
-                                    :else
-                                    (cond-> possible-action
-                                      (:context possible-action) (update :context eval-action fx no-io data input)))
-                           action (update action :name #(or % action-name))
-
-                           new-execution (apply-action start-time execution (merge {:context (:execution/memory execution)} action))]
-                       (verify-execution
-                        (merge {:execution/error             nil
-                                :execution/dispatch-result   nil
-                                :execution/dispatch-by-input nil}
-                               (when-let [wait-for (:execution/wait-for new-execution)]
-                                 (cond
-                                   (:state-machine wait-for)
-                                   (let [state-machine-id (:state-machine wait-for)
-                                         sub-eid          (UUID/randomUUID)
-                                         aid              (or (:id possible-action) (:name possible-action))
-                                         e-result         (start fx state-machine-id sub-eid
-                                                                 (:state wait-for)
-                                                                 (merge (:input wait-for)
-                                                                        {::io     (:execution/io execution)
-                                                                         ::return [(:execution/id execution) aid]}))]
-                                     (assert aid "Action needs a name or id")
-                                     {:execution/dispatch-result   e-result
-                                      :execution/dispatch-by-input input})
-
-                                   (:seconds wait-for)
-                                   (do (sleep fx (* 1000 (:seconds wait-for)) (:execution/id execution)
-                                              (merge {::action  (:state action)
-                                                      ::version (inc (:execution/version execution))
-                                                      ::cause   {:wait-for wait-for}}
-                                                     (:input action)))
-                                       nil)
-
-                                   (:timestamp wait-for)
-                                   (do (sleep-to fx (:timestamp wait-for)
-                                                 (:execution-id execution)
-                                                 (merge {::action  (:state action)
-                                                         ::version (inc (:execution/version execution))
-                                                         ::cause   {:wait-for wait-for}}
-                                                        (:input action)))
-                                       nil)))
-                               new-execution))))
-                   {:execution/comment    "No available actions"
-                    :execution/event-name "Input Error"
-                    :execution/status     "failed-resumable"
-                    :execution/version    (inc (:execution/version execution))
-                    :execution/error      {:error            "cannot find action in state machine"
-                                           :state            estate
-                                           :input-action     action-name
-                                           :possible-actions possible-actions
-                                           :node             node}}))
-               (catch Throwable t
-                 (let [now (now!)]
-                   {:execution/comment         "Failed step with exception"
-                    :execution/event-name      "Error"
-                    :execution/version         (inc (:execution/version execution))
-                    :execution/error           (Throwable->map t)
-                    :execution/status          "failed"
-                    :execution/wait-for        nil
-                    :execution/user-started-at start-time
-                    :execution/user-ended-at   now
-                    :execution/failed-at       now
-                    :execution/finished-at     now})))
-             {:execution/comment    "No available actions"
-              :execution/event-name "Input Error"
-              :execution/status     "failed-resumable"
-              :execution/version    (inc (:execution/version execution))
-              :execution/error      {:error            "cannot find action in state machine"
-                                     :state            estate
-                                     :input-action     action-name
-                                     :possible-actions (keys (:actions node))}}))
-         (let [now (now!)]
-           {:execution/comment         "Invalid state"
-            :execution/event-name      "Internal Error"
-            :execution/version         (inc (:execution/version execution))
-            :execution/error           (Throwable->map (ex-info "Unrecognized state"
-                                                                {:state           estate
-                                                                 :possible-states (set (keys (:state-machine/states state-machine)))}))
-            :execution/status          "failed"
-            :execution/user-started-at start-time
-            :execution/user-ended-at   now
-            :execution/finished-at     now
-            :execution/failed-at       now}))))))
+    ;; advance possibly an automated state machine advance
+    :else
+    (let [{:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                         (set/rename-keys input {::action ::core/action
+                                                                                                 ::resume ::core/resume}))
+          now                                       (now!)
+          next-execution                            (assoc (:execution result)
+                                                           :execution/error error
+                                                           :execution/pending-effects effects
+                                                           :execution/step-ended-at now
+                                                           :execution/comment "Processed step")
+          stop?                                     (should-stop? next-execution effects error)]
+      [stop? (cond-> next-execution
+               stop? (assoc :execution/finished-at now))])))
 
 (defn- run-linear-execution
   "Runs an execution, saving its state into the database executions. Avoids
@@ -503,40 +409,27 @@
   acknowledgements).
   "
   [fx state-machine starting-execution input]
-  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)
-        latest-execution (atom starting-execution)]
+  (let [timeout          (or (:state-machine/timeout-msec state-machine) async-step-timeout)
+        latest-execution (atom starting-execution)
+        cofx             (make-cofx fx io)]
     (try
       (timed-run
        timeout
        (loop [execution starting-execution
               input     input]
-         (let [updated-fields (step-execution fx state-machine execution input)
-               now            (now!)
-               entity         (merge execution updated-fields {:execution/step-ended-at now})
-               tx             (save-execution fx entity)]
-           (assert (not= "running" (:execution/status entity))
-                   (pr-str updated-fields))
-           ; TODO: if we fail to save... is there anything we can do?
-           (when (:error entity)
-             (throw (ex-info "Failed to save success in execution"
-                             {:context      entity
-                              :execution-id (:db/id execution)
-                              :timestamp    now})))
-
-           (reset! latest-execution execution)
-           (if (can-continue? state-machine entity nil)
+         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
+               _                      (reset! latest-execution execution)
+               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               tx                     (save-execution fx next-execution)]
+           (if stop?
+             (if (:ok @tx)
+               next-execution
+               (throw (ex-info "Failed to save execution"
+                               {:context      next-execution
+                                :execution-id (:execution/id execution)})))
              (recur (do (deref tx 1000 ::timeout)
-                        (:entity @(acquire-execution fx "linear-execution" entity nil)))
-                    nil)
-             (if (and (completed-execution? entity)
-                      (not (:ok @tx)))
-               (throw (ex-info "Failed to save success in execution"
-                               {:context      entity
-                                :execution-id (:db/id execution)
-                                :timestamp    now}))
-               (do
-                 (maybe-return-execution! fx entity)
-                 entity))))))
+                        (:entity @(acquire-execution fx "linear" next-execution nil)))
+                    nil)))))
       (catch Exception e
         (record-exception fx latest-execution e)))))
 
@@ -553,39 +446,27 @@
   acknowledgements).
   "
   [fx state-machine starting-execution input]
-  (let [timeout (or (:state-machine/timeout-msec state-machine) async-step-timeout)
-        latest-execution (atom starting-execution)]
+  (let [timeout          (or (:state-machine/timeout-msec state-machine) async-step-timeout)
+        latest-execution (atom starting-execution)
+        cofx             (make-cofx fx io)]
     (try
       (timed-run
        timeout
        (loop [execution starting-execution
               input     input]
-         (let [updated-fields (step-execution fx state-machine execution input)
-               now            (now!)
-               entity         (merge execution updated-fields {:execution/step-ended-at now})
-               tx             (save-execution fx entity)]
-           (assert (not= "running" (:execution/status entity))
-                   (pr-str updated-fields))
-           ;; TODO: if we fail to save... is there anything we can do?
-           (when (:error entity)
-             (throw (ex-info "Failed to save success in execution"
-                             {:context      entity
-                              :execution-id (:db/id execution)
-                              :timestamp    now})))
-           (reset! latest-execution execution)
-           (if (can-continue? state-machine entity nil)
-             (recur (do (acquire-execution fx "linear-execution" entity nil)
-                        entity)
-                    nil)
-             (if (and (completed-execution? entity)
-                      (not (:ok @tx)))
-               (throw (ex-info "Failed to save success in execution"
-                               {:context      entity
-                                :execution-id (:db/id execution)
-                                :timestamp    now}))
-               (do
-                 (maybe-return-execution! fx entity)
-                 entity))))))
+         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
+               _                      (reset! latest-execution execution)
+               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               tx                     (save-execution fx next-execution)]
+           (if stop?
+             (if (:ok @tx)
+               next-execution
+               (throw (ex-info "Failed to save execution"
+                               {:context      next-execution
+                                :execution-id (:execution/id execution)})))
+             (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil)
+                        next-execution)
+                    nil)))))
       (catch Exception e
         (record-exception fx latest-execution e)))))
 
@@ -611,31 +492,33 @@
   [fx state-machine execution input]
   (assert (:execution/state-machine-id execution))
   (assert (:execution/state-machine-version execution))
-  (try
-    (let [updated-fields (step-execution fx state-machine execution input)
-          now            (now!)
-          tx             @(save-execution fx (merge execution updated-fields {:execution/step-ended-at now}))
-          entity         (:entity tx)]
-      (assert (not= "running" (:execution/status entity)))
-      ;; TODO: if we fail to save... is there anything we can do?
-      (when (:error tx)
-        (throw (ex-info "Failed to save success in execution"
-                        {:context      tx
-                         :execution-id (:db/id execution)
-                         :timestamp    now})))
-      (when (can-continue? state-machine entity nil)
-        (enqueue-execution fx (:execution/id entity) nil))
-      (maybe-return-execution! fx entity)
-      entity)
-    (catch Exception e
-      (record-exception fx execution e))))
+  (let [timeout          (or (:state-machine/timeout-msec state-machine) async-step-timeout)
+        latest-execution (atom execution)
+        cofx             (make-cofx fx io)]
+    (try
+      (timed-run
+       timeout
+       (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
+             _                      (reset! latest-execution execution)
+             ;; TODO(jeff): save intermediate executions (under (map second actions))
+             tx                     @(save-execution fx next-execution)]
+         (if stop?
+           (if (:ok tx)
+             next-execution
+             (throw (ex-info "Failed to save execution"
+                             {:context      next-execution
+                              :execution-id (:execution/id execution)})))
+           (do
+             (enqueue-execution fx (:execution/id execution) nil)
+             next-execution))))
+      (catch Exception e
+        (record-exception fx latest-execution e)))))
 
 (defn- sync-run
   ([fx state-machine execution] (sync-run fx state-machine execution nil))
   ([fx state-machine execution input]
    (save-execution fx execution)
-   (let [final-execution (first (sequence (run-sync-execution fx "synchronous-execution" state-machine)
-                                          [execution input]))]
+   (let [final-execution (run-sync-execution fx "synchronous-execution" state-machine execution input)]
      [(= "finished" (:execution/status final-execution)) (:execution/id execution) final-execution])))
 (defn- async-run
   ([fx state-machine execution] (async-run fx state-machine execution nil))
@@ -654,20 +537,24 @@
   ([fx] (create-execution-handler fx nil))
   ([fx {:keys [executor-name]}]
    (fn handler [eid input]
-     (let [executor-name (or executor-name (.getName (Thread/currentThread)))
-           [execution input]
-           (loop [attempts 1]
-             (when (< attempts 30)
-               (when-let [e (fetch-execution fx eid :latest)]
-                 (when (:execution/state e)
-                   ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
-                   (when-let [res (acquire-execution fx executor-name e input)]
-                     (if-let [e (:entity (deref res 10000 nil))]
-                       [e input]
-                       (do
-                         (Thread/sleep (* attempts attempts))
-                         (recur (inc attempts)))))))))]
-       (when execution
-         (let [state-machine  (fetch-statem fx (:execution/state-machine-id execution) (:execution/state-machine-version execution))
-               {:keys [step]} (executor (:execution/mode execution))]
-           (step fx state-machine execution input)))))))
+     (try
+       (let [executor-name (or executor-name (.getName (Thread/currentThread)))
+             [execution input]
+             (loop [attempts 1]
+               (when (< attempts 30)
+                 (when-let [e (fetch-execution fx eid :latest)]
+                   (when (:execution/state e)
+                     ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
+                     (when-let [res (acquire-execution fx executor-name e input)]
+                       (if-let [e (:entity (deref res 10000 nil))]
+                         [e input]
+                         (do
+                           (Thread/sleep (* attempts attempts))
+                           (recur (inc attempts)))))))))]
+         (when execution
+           (let [state-machine  (fetch-statem fx (:execution/state-machine-id execution) (:execution/state-machine-version execution))
+                 {:keys [step]} (executor (:execution/mode execution))]
+             (step fx state-machine execution input))))
+       (catch Throwable t
+         (.printStackTrace t))))))
+
