@@ -1,111 +1,66 @@
 (ns net.jeffhui.workflow.schema
   (:require [malli.core :as m]
-            [malli.error :as me]))
+            [malli.error :as me]
+            [clojure.set :as set]))
 
 (def Code any?)
 
-(def State
-  [:or string? keyword? integer?])
+(def StateId [:or string? keyword? integer?])
 
 (def Transition
-  [:schema {:registry {::std-transition [:map
-                                         [:state State]
-                                         [:name {:optional true} string?]
-                                         [:wait-for {:optional true}
-                                          [:map [:seconds integer?]]]
-                                         [:context {:optional true} Code]]
-                       ::cond-transition [:map
-                                          [:state State]
-                                          [:name {:optional true} string?]
-                                          [:when Code]
-                                          [:wait-for {:optional true}
-                                           [:map [:seconds integer?]]]
-                                          [:context {:optional true} Code]]
-                       ::invoke-transition [:map
-                                      [:id string?]
-                                      [:name {:optional true} string?]
-                                      [:when {:optional true} Code]
-                                      [:wait-for {:optional true}
-                                       [:map [:seconds integer?]]]
-                                      [:context {:optional true} Code]
-                                      [:invoke
-                                       [:or
-                                        ;; invoke state machine
-                                        [:map
-                                         [:state-machine [:tuple string? integer?]]
-                                         [:async? {:optional true} boolean?]
-                                         [:input {:optional true} Code]
-                                         [:success [:ref ::std-transition]]
-                                         [:error [:ref ::std-transition]]]
-                                        ;; trigger execution
-                                        [:map
-                                         [:trigger Code]
-                                         [:async? {:optional true} boolean?]
-                                         [:input {:optional true} Code]
-                                         [:success [:ref ::std-transition]]
-                                         [:error [:ref ::std-transition]]]
-                                        ;; invoke io
-                                        [:map
-                                         [:given Code]
-                                         [:if Code]
-                                         [:then [:ref ::std-transition]]
-                                         [:else [:ref ::std-transition]]]]]]
-                       ::transition [:or
-                                     [:ref ::std-transition]
-                                     [:ref ::invoke-transition]]}}
-   ::transition])
-
-(def TransitionV2
-  [:schema {:registry {::std-transition [:map
-                                         [:id {:optional true} State]
-                                         [:when {:optional true} Code]
-                                         [:state {:optional true} State]
-                                         [:context {:optional true} Code]
-                                         ]
+  [:schema {:registry {::std-transition [:and
+                                         [:or
+                                          [:map [:state StateId]]
+                                          [:map [:context StateId]]]
+                                         [:map
+                                          [:id StateId]
+                                          [:when {:optional true} Code]
+                                          [:state {:optional true} StateId]
+                                          [:context {:optional true} Code]]]
                        ::if-transition [:map
-                                        [:id State]
-                                        [:state State]
+                                        [:id StateId]
+                                        [:state {:optional true} StateId]
                                         [:when {:optional true} Code]
                                         [:if Code]
                                         [:then [:ref ::std-transition]]
                                         [:else [:ref ::std-transition]]]
                        ::wait-transition [:map
-                                          [:id State]
-                                          [:state {:optional true} State]
+                                          [:id StateId]
+                                          [:state {:optional true} StateId]
                                           [:context {:optional true} Code]
                                           [:when {:optional true} Code]
                                           [:wait-for
                                            [:or
                                             [:map
                                              [:seconds integer?]
-                                             [:state {:optional true} State]
+                                             [:state {:optional true} StateId]
                                              [:context {:optional true} Code]]
                                             [:map
                                              [:timestamp integer?]
-                                             [:state {:optional true} State]
+                                             [:state {:optional true} StateId]
                                              [:context {:optional true} Code]]]]]
                        ::invoke-transition [:map
-                                            [:id State]
-                                            [:state {:optional true} State]
+                                            [:id StateId]
+                                            [:state {:optional true} StateId]
                                             [:context {:optional true} Code]
                                             [:when {:optional true} Code]
                                             [:invoke
                                              [:or
-                                              [:map ;; Start Execution (State Machine)
+                                              [:map ;; Start Execution (StateId Machine)
                                                [:state-machine [:tuple Code Code]]
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
-                                               [:state State]
+                                               [:state StateId]
                                                [:context {:optional true} Code]]
                                               [:map ;; Trigger Execution
                                                [:execution [:tuple Code Code]]
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
-                                               [:state State]
+                                               [:state StateId]
                                                [:context {:optional true} Code]]
                                               [:map ;; IO call
                                                [:call Code]
-                                               [:state State]
+                                               [:state StateId]
                                                [:context {:optional true} Code]]]]]
                        ::transition [:or
                                      [:ref ::std-transition]
@@ -114,6 +69,52 @@
                                      [:ref ::invoke-transition]]}}
    ::transition])
 
+(def ^:private state-id?
+  (m/validator StateId))
+
+(defn- state-has-unique-transition-ids [actions]
+  (let [values (mapv :id actions)]
+    (= (count values) (count (distinct values)))))
+
+(defn- state-has-unique-whens [actions]
+  (let [values (into []
+                     (comp
+                      (map :when)
+                      (remove nil?))
+                     actions)]
+    (= (count values) (count (distinct values)))))
+
+(defn- unique-of [xf]
+  (fn unique [actions]
+    (let [values (into [] xf actions)]
+      (= (count values) (count (distinct values))))))
+
+(defn- multiple-reference-error [key]
+  (fn [{:keys [value] :as error} _]
+    (let [f (into {}
+                  (comp
+                   (filter (fn [[k v]] (< 1 v)))
+                   (map (fn [[k v]] [k "has been defined multiple times, but should be unique"])))
+                  (frequencies (map key value)))]
+      {key f})))
+
+(def State
+  [:or
+   [:map [:return Code]]
+   [:map [:actions [:and
+                    [:vector Transition]
+                    [:fn {:error/fn (multiple-reference-error :id)} (unique-of (map :id))]
+                    [:fn {:error/fn (multiple-reference-error :when)} (unique-of (comp (map :when) (remove nil?)))]]]]])
+
+#_
+(me/humanize
+ (m/explain State {:actions [{:id "a"
+                              :when "a"
+                              :state "state1"}
+                             {:id "a"
+                              :when "a"
+                              :state "state1"}]}))
+
 (def StateMachine
   [:map
    [:state-machine/id string?]
@@ -121,18 +122,7 @@
    [:state-machine/execution-mode string?]
    [:state-machine/context {:optional true} Code]
    [:state-machine/io {:optional true} [:map-of any? Code]]
-   [:state-machine/states [:map-of
-                           State
-                           [:or
-                            [:map [:return Code]]
-                            [:map
-                             [:actions [:vector TransitionV2]]]
-                            [:map
-                             [:always [:vector Transition]]
-                             [:actions {:optional true} [:map-of any? Transition]]]
-                            [:map
-                             [:always {:optional true} [:vector Transition]]
-                             [:actions [:map-of any? Transition]]]]]]])
+   [:state-machine/states [:map-of StateId State]]])
 
 (def Time pos-int?)
 
@@ -145,7 +135,7 @@
    [:execution/state-machine-version integer?]
    ;; [:execution/io [:maybe [:map-of any? Code]]]
    [:execution/mode string?]
-   [:execution/state [:maybe State]] ;; nil indicates terminated
+   [:execution/state [:maybe StateId]] ;; nil indicates terminated
    [:execution/memory any?]
    [:execution/pause-state [:enum "ready" "await-input" "wait" "finished"]]
    [:execution/pause-memory any?]

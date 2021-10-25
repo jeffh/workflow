@@ -5,13 +5,21 @@
 
 ;; TODO(jeff): Error should show code snippet executed along with exception
 
+#_
+(defn debug-print [& values]
+  (locking *out*
+    (prn values)))
+
 (defmacro ^:private assert-arg [expr msg & args]
   `(when-not ~expr
      (throw (IllegalArgumentException. (format ~msg ~@args)))))
 
 (defn empty-execution
   "Creates an execution that has some initial values. These are fundamental
-   values needed to step through an execution"
+   values needed to step through an execution.
+
+  Caller is expected to evaluate :initial-context key
+  "
   [{:keys [execution-id state-machine initial-context input return-to]}]
   {:execution/id                    execution-id
    :execution/version               1
@@ -22,22 +30,21 @@
    :execution/memory                initial-context
    :execution/input                 input
    :execution/pause-memory          nil
-   :execution/return-to             return-to})
+   :execution/return-to             (or return-to (::return-to input))})
 
 (defrecord Result [execution effects transitions error])
 
 (defmacro ^:private try? [execution action body]
-  `(let [a# ~action]
-     (try
-       ~body
-       (catch Throwable t#
-         (->Result ~execution
-                   nil
-                   a#
-                   #:error{:code      :exception
-                           :reason    "Exception throw when evaluating code"
-                           :action    a#
-                           :throwable (Throwable->map t#)})))))
+  `(try
+     ~body
+     (catch Throwable t#
+       (->Result ~execution
+                 nil
+                 nil
+                 #:error{:code      :exception
+                         :reason    "Exception thrown when evaluating code"
+                         :action    ~action
+                         :throwable (Throwable->map t#)}))))
 
 (declare next-execution)
 (defn step-execution
@@ -71,8 +78,11 @@
           :sleep/seconds    {:seconds Int} -> ...
           :sleep/timestamp  {:timestamp Inst} -> ...
 
-      transitions are the sequence of [action-id execution] that indicates what path was taken
-      produces the associated execution.
+      transitions are the sequence of [action-id execution] that indicates what
+        path was taken produces the associated execution.
+
+        Also, each element will have metadata that indicates the execution at
+        this point in time.
 
     Cofx:
       eval-expr!           => Code context input -> EDN
@@ -89,24 +99,30 @@
   "
   ([cofx state-machine execution] (step-execution cofx state-machine execution nil))
   ([cofx state-machine execution input]
-   (loop [prev-result    nil
-          result         (with-meta (->Result execution nil nil nil) {:previous execution})
-          input          input
-          result-actions (transient [])]
-     (let [{:keys [execution effects actions error]} result]
+   (loop [prev-result        nil
+          result             (with-meta (->Result execution nil nil nil) {:previous execution})
+          input              input
+          result-transitions (transient [])]
+     (let [{:keys [execution effects transitions error]} result]
        (if (and prev-result (or effects error
                                 (#{"wait" "finished"} (:execution/pause-state execution))
                                 (= (:execution/version (:execution prev-result))
                                    (:execution/version execution))))
          (if (:error/rejected? error)
-           (assoc prev-result :actions (persistent! result-actions))
-           (assoc result :actions (persistent! (do (doseq [a actions] (conj! result-actions a))
-                                                   result-actions))))
+           (assoc prev-result :transitions (persistent! result-transitions))
+           (assoc result :transitions (persistent! (do (doseq [t transitions]
+                                                         (conj! result-transitions (with-meta t {:execution execution
+                                                                                                 :effects   effects
+                                                                                                 :error     error})))
+                                                       result-transitions))))
          (recur result
                 (next-execution cofx state-machine execution input)
                 nil
-                (do (doseq [a actions] (conj! result-actions a))
-                    result-actions)))))))
+                (do (doseq [t transitions]
+                      (conj! result-transitions (with-meta t {:execution execution
+                                                              :effects   effects
+                                                              :error     error})))
+                    result-transitions)))))))
 
 (defn- requires-trigger? [statem-states state]
   (boolean
@@ -144,7 +160,7 @@
 
         Current ops that are required:
           :execution/start  {:state-machine-id .., :execution-id ..., :input ..., async? bool} -> {:ok bool, :execution/id ..., :error ...}
-          :execution/step   {:execution-id ..., :action ... :input ..., :async? Maybe(bool)} -> {:ok bool, :error ..., ...}
+          :execution/step   {:execution-id ..., :action Maybe(...) :input ..., :async? Maybe(bool)} -> {:ok bool, :error ..., ...}
           :execution/return {...} -> Void
           :invoke/io        {:input ..., :expr ...} -> {:ok bool, :error ..., :value ....}
           :sleep/seconds    {:seconds Int} -> {:ok bool, :error ...}
@@ -175,29 +191,26 @@
      (assert-arg state "Execution state cannot be nil: %s" (pr-str execution))
      (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
                                                                                       :possible-states (keys states)}))
+     #_(debug-print "STEP" (:execution/state-machine-id execution) (:execution/id execution) input)
      (vary-meta
       (if (contains? state-node :return)
          (if (= "finished" (:execution/pause-state execution))
            (->Result execution nil nil nil)
-           (->Result (assoc (next-ver execution) :execution/pause-state "finished")
-                     (vec
-                      (remove nil?
-                              [{:op   :execution/return
-                                :args {:result (:return state-node)}}
-                               (when-let [return-to (:execution/return-to execution)]
-                                 (let [[execution-id action-name] return-to]
-                                   {:op   :execution/step
-                                    :args {:execution-id execution-id
-                                           :action       action-name
-                                           :input        (:return state-node)}}))]))
-                     nil nil))
-         (if resume
+           (let [return-value (eval-expr! (:return state-node) data input)]
+             (->Result (assoc (next-ver execution) :execution/pause-state "finished")
+                       [{:op   :execution/return
+                         :args {:result return-value
+                                :to     (when-let [return-to (:execution/return-to execution)]
+                                          [return-to])}}]
+                       [{:id "finish" :finished true}]
+                       nil)))
+         (if (= "wait" (:execution/pause-state execution))
            (cond
-             (not= (:execution/pause-state "wait"))
+             (not resume)
              (->Result execution nil nil
                        #:error{:rejected? true
-                               :code      :expired-return
-                               :reason    "Return valid is no longer valid for this execution"
+                               :code      :no-resume
+                               :reason    "Expect a resume action"
                                :input     input})
 
              (nil? (contains? (:resumers (:execution/pause-memory execution)) (:id resume)))
@@ -213,17 +226,17 @@
               (merge {:id      (:action-id (:execution/pause-memory execution))
                       :resume? true}
                      (get (:resumers (:execution/pause-memory execution)) (:id resume)))
-              (let [rid    (:id resume)
-                    return (:return resume)
+              (let [rid (:id resume)
 
                     {:keys [action-id original-input resumers]} (:execution/pause-memory execution)
                     {:keys [then]}                              (get resumers rid)
 
                     next-state    (or (:state then) state)
                     next-data     (if (:context then)
-                                    (eval-expr! (:context then) data original-input return)
+                                    (eval-expr! (:context then) data original-input (:return resume))
                                     data)
                     next-resumers (not-empty (dissoc (:resumers (:execution/pause-memory execution)) rid))]
+                #_(debug-print "RESUME" (:execution/state-machine-id execution) resume)
                 (->Result (merge (next-ver execution)
                                  {:execution/state  next-state
                                   :execution/memory next-data}
@@ -233,7 +246,7 @@
                                    {:execution/pause-state  (ready-or-await-pause-state states next-state)
                                     :execution/pause-memory nil}))
                           nil
-                          [(str "returned(" action-id ")")]
+                          [{:id (str "returned(" action-id ")") :ref rid :return? true}]
                           nil))))
            (let [actions (vec actions)
                  size    (count actions)]
@@ -264,14 +277,14 @@
                                  aid              (:id action)
                                  eid              (random-execution-id!)
                                  rid              (random-resume-id!)
-                                 next-state       (or (:state invoke) state)
+                                 next-state       (or (:state action) state)
                                  next-data        (if (:context action)
                                                     (eval-expr! (:context action) data input)
                                                     data)
                                  state-machine-id (eval-expr! (:state-machine invoke) data input)
                                  statem-input     (merge (:input invoke)
                                                          (when-let [eio (:execution/io execution)] {::io eio})
-                                                         (when async? {::return [(:execution/id execution) aid]}))]
+                                                         (when-not async? {::return-to [(:execution/id execution) rid]}))]
                              (->Result (merge (next-ver execution)
                                               {:execution/pause-state  "wait"
                                                :execution/pause-memory {:action-id        aid
@@ -284,10 +297,10 @@
                                        [{:op           :execution/start
                                          :args         {:state-machine-id state-machine-id
                                                         :execution-id     eid
-                                                        :input            statem-input
+                                                        :input            (eval-expr! statem-input data input)
                                                         :async?           async?}
                                          :complete-ref rid}]
-                                       [(:id action)]
+                                       [{:id (:id action)}]
                                        nil))
 
                            (:execution invoke)
@@ -311,17 +324,17 @@
                                        [{:op           :execution/step
                                          :args         {:execution-id eid
                                                         :action       action-name
-                                                        :input        (:input invoke)
+                                                        :input        (eval-expr! exec-input data input)
                                                         :async?       async?}
                                          :complete-ref rid}]
-                                       [(:id action)]
+                                       [{:id (:id action)}]
                                        nil))
 
                            (:call invoke)
                            (let [effect (:call invoke)
                                  rid    (random-resume-id!)]
                              (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait-io"
+                                              {:execution/pause-state  "wait"
                                                :execution/pause-memory {:action-id      (:id action)
                                                                         :original-input input
                                                                         :resumers       {rid {:then (select-keys invoke [:state :context])}}}})
@@ -329,7 +342,7 @@
                                          :args         {:input input
                                                         :expr  effect}
                                          :complete-ref rid}]
-                                       [(:id action)]
+                                       [{:id (:id action)}]
                                        nil))
 
                            :else (throw (ex-info "Unrecognized :invoke" {:action action
@@ -354,8 +367,10 @@
                                               :execution/state        next-state
                                               :execution/memory       next-data
                                               :execution/input        input})
-                                      [{:op :sleep/seconds :args {:seconds seconds} :complete-ref resume-id}]
-                                      [(:id action)]
+                                      [{:op           :sleep/seconds
+                                        :args         {:seconds (eval-expr! seconds data input)}
+                                        :complete-ref resume-id}]
+                                      [{:id (:id action)}]
                                       nil)
 
                             timestamp
@@ -367,14 +382,16 @@
                                               :execution/state        next-state
                                               :execution/memory       next-data
                                               :execution/input        input})
-                                      [{:op :sleep/timestamp :args {:timestamp timestamp} :complete-ref resume-id}]
-                                      [(:id action)]
+                                      [{:op           :sleep/timestamp
+                                        :args         {:timestamp (eval-expr! timestamp data input)}
+                                        :complete-ref resume-id}]
+                                      [{:id (:id action)}]
                                       nil)
 
                             :else
                             (->Result execution
                                       nil
-                                      [(:id action)]
+                                      [{:id (:id action)}]
                                       #:error{:code   :invalid-action
                                               :reason "Unrecognized wait-for action"
                                               :action action}))))
@@ -395,7 +412,7 @@
                                             :execution/memory       next-data
                                             :execution/input        input})
                                     nil
-                                    [(:id action)]
+                                    [{:id (:id action)}]
                                     nil)))
 
                        (or (:state action) (:context action))
@@ -410,7 +427,7 @@
                                            :execution/memory       next-data
                                            :execution/input        input})
                                    nil
-                                   [(:id action)]
+                                   [{:id (:id action)}]
                                    nil))
 
                        :else
@@ -426,75 +443,76 @@
 
 
 (comment
-  (def order-statem
-    #:state-machine{:id             "order"
-                    :version        1
-                    :start-at       "create"
-                    :execution-mode "async-throughput"
-                    :context        '{:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
-                    :states         '{"create"    {:actions [{:id    "created"
-                                                              :state "cart"}]}
-                                      "cart"      {:actions [{:id      "add"
-                                                              :when    "add"
-                                                              :state   "cart"
-                                                              :context (update-in ctx [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
-                                                             {:id      "remove"
-                                                              :when    "remove"
-                                                              :state   "cart"
-                                                              :context (letfn [(sub [a b]
-                                                                                 (let [a (vec a)
-                                                                                       n (count a)]
-                                                                                   (loop [out (transient [])
-                                                                                          i   0
-                                                                                          b   (frequencies b)]
-                                                                                     (if (= i n)
-                                                                                       (persistent! out)
-                                                                                       (let [ai (a i)]
-                                                                                         (if (pos? (b ai 0))
-                                                                                           (recur out (inc i) (update b ai dec))
-                                                                                           (recur (conj! out ai) (inc i) b)))))))]
-                                                                         (update-in ctx [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
-                                                             {:id    "submit"
-                                                              :when  "submit"
-                                                              :state "submitted"}]}
-                                      "submitted" {:actions [{:id    "fraud-approve"
-                                                              :when  "fraud-approve"
-                                                              :state "fraud-approved"}
-                                                             {:id    "fraud-reject"
-                                                              :when  "fraud-reject"
-                                                              :state "fraud-rejected"}]}
+  (do
+    (def order-statem
+      #:state-machine{:id             "order"
+                      :version        1
+                      :start-at       "create"
+                      :execution-mode "async-throughput"
+                      :context        '{:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
+                      :states         '{"create"    {:actions [{:id    "created"
+                                                                :state "cart"}]}
+                                        "cart"      {:actions [{:id      "add"
+                                                                :when    "add"
+                                                                :state   "cart"
+                                                                :context (update-in ctx [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
+                                                               {:id      "remove"
+                                                                :when    "remove"
+                                                                :state   "cart"
+                                                                :context (letfn [(sub [a b]
+                                                                                   (let [a (vec a)
+                                                                                         n (count a)]
+                                                                                     (loop [out (transient [])
+                                                                                            i   0
+                                                                                            b   (frequencies b)]
+                                                                                       (if (= i n)
+                                                                                         (persistent! out)
+                                                                                         (let [ai (a i)]
+                                                                                           (if (pos? (b ai 0))
+                                                                                             (recur out (inc i) (update b ai dec))
+                                                                                             (recur (conj! out ai) (inc i) b)))))))]
+                                                                           (update-in ctx [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
+                                                               {:id    "submit"
+                                                                :when  "submit"
+                                                                :state "submitted"}]}
+                                        "submitted" {:actions [{:id    "fraud-approve"
+                                                                :when  "fraud-approve"
+                                                                :state "fraud-approved"}
+                                                               {:id    "fraud-reject"
+                                                                :when  "fraud-reject"
+                                                                :state "fraud-rejected"}]}
 
-                                      "fraud-approved"     {:actions [{:id    "release-for-shipping"
-                                                                       :state "to-release"}]}
-                                      "fraud-rejected"     {:actions [{:id "cancel" :state "canceled"}]}
-                                      "to-release"         {:actions [{:id     "ship"
-                                                                       :invoke {:state-machine ["shipment" 1]
-                                                                                :input         {:order (:id (:order ctx))}
-                                                                                :state         "submitted-shipment"
-                                                                                :context       (assoc ctx :delivered (:delivered (:execution/return-data output)))}}]}
-                                      "submitted-shipment" {:actions [{:id    "shipped"
-                                                                       :state "shipped"
-                                                                       :when  (:delivered ctx)}
-                                                                      {:id    "cancel"
-                                                                       :state "canceled"}]}
-                                      "shipped"            {:return true}
-                                      "canceled"           {:return false}}})
+                                        "fraud-approved"     {:actions [{:id    "release-for-shipping"
+                                                                         :state "to-release"}]}
+                                        "fraud-rejected"     {:actions [{:id "cancel" :state "canceled"}]}
+                                        "to-release"         {:actions [{:id     "ship"
+                                                                         :invoke {:state-machine ["shipment" 1]
+                                                                                  :input         {:order (:id (:order ctx))}
+                                                                                  :state         "submitted-shipment"
+                                                                                  :context       (assoc ctx :delivered (:delivered (:execution/return-data output)))}}]}
+                                        "submitted-shipment" {:actions [{:id    "shipped"
+                                                                         :state "shipped"
+                                                                         :when  (:delivered ctx)}
+                                                                        {:id    "cancel"
+                                                                         :state "canceled"}]}
+                                        "shipped"            {:return true}
+                                        "canceled"           {:return false}}})
 
-  (def e1 (empty-execution {:sync?           false
-                            :execution-id    #uuid "A0A5CD52-7866-4187-B547-F218DDA33B6B"
-                            :state-machine   order-statem
-                            :initial-context {:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
-                            :now             (System/nanoTime)}))
+    (def e1 (empty-execution {:sync?           false
+                              :execution-id    #uuid "A0A5CD52-7866-4187-B547-F218DDA33B6B"
+                              :state-machine   order-statem
+                              :initial-context {:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
+                              :now             (System/nanoTime)}))
 
-  (require '[net.jeffhui.workflow.interpreters :as interpreters :refer [->Sandboxed ->Naive]])
+    (require '[net.jeffhui.workflow.interpreters :as interpreters :refer [->Sandboxed ->Naive]])
 
-  (def cofx
-    {:eval-expr!           (fn
-                             ([expr context input] (interpreters/eval-action expr #(throw (ex-info "no io")) context input :net.jeffhui.workflow.protocol/nothing))
-                             ([expr context input output] (interpreters/eval-action expr #(throw (ex-info "no io")) context input output)))
-     :current-time!        #(System/nanoTime)
-     :random-resume-id!    #(vector :resume/id (UUID/randomUUID))
-     :random-execution-id! #(vector :execution/id (UUID/randomUUID))})
+    (def cofx
+      {:eval-expr!           (fn
+                               ([expr context input] (interpreters/eval-action expr #(throw (ex-info "no io")) context input :net.jeffhui.workflow.protocol/nothing))
+                               ([expr context input output] (interpreters/eval-action expr #(throw (ex-info "no io")) context input output)))
+       :current-time!        #(System/nanoTime)
+       :random-resume-id!    #(vector :resume/id (UUID/randomUUID))
+       :random-execution-id! #(vector :execution/id (UUID/randomUUID))}))
 
   (do
     (def e2 (next-execution cofx order-statem e1 nil))
@@ -525,7 +543,8 @@
        (def se5 (step-execution cofx order-statem (:execution se4) {::action "fraud-approve"}))
        (def se6 (step-execution cofx order-statem (:execution se5) {::resume {:id (:complete-ref (first (:effects se5)))
                                                                               :return {:execution/return-data {:delivered true}}}}))
-       (def se7 (step-execution cofx order-statem (:execution se6) nil)))))
+       (def se7 (step-execution cofx order-statem (:execution se6) nil))
+       (def se8 (step-execution cofx order-statem (:execution se7) {::action "TEST"})))))
 
   se2
   se3
@@ -533,5 +552,14 @@
   se5
   se6
   se7
+  se8
+
+  (meta (first (:transitions se6)))
+
+  (next-execution cofx order-statem (:execution se5)
+                  {::resume {:id (:complete-ref (first (:effects se5)))
+                             :return {:execution/return-data {:delivered true}}}})
+
+  [se5 se6 se7]
 
   )

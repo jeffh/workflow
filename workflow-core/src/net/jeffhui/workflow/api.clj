@@ -78,7 +78,7 @@
         mode  (:state-machine/execution-mode state-machine)
         sync? (= mode "sync")]
     (merge
-     (core/empty-execution (assoc options :return-to (or return-to (::return input))))
+     (core/empty-execution (assoc options :return-to (or return-to (::return-to input) (::core/return-to input))))
      {:execution/comment           (if sync? "Immediately starting execution" "Enqueued for execution")
       :execution/mode              mode
       :execution/enqueued-at       now
@@ -97,14 +97,16 @@
 (defn start
   "Starts an execution.
 
+  state-machine-id = string? | [string? int?]
+  execution-id = uuid?
+
   Note: It isn't safe to for input to come from untrusted sources.
    - Recommended: validate input values before passing through this function.
    - Less Good Alternative: pass the untrusted input as a key in input.
   "
-  ([fx state-machine-id] (start fx state-machine-id (UUID/randomUUID) nil nil))
-  ([fx state-machine-id input] (start fx state-machine-id (UUID/randomUUID) nil input))
-  ([fx state-machine-id initial-context input] (start fx state-machine-id (UUID/randomUUID) initial-context input))
-  ([fx state-machine-id execution-id initial-context input]
+  ([fx state-machine-id]       (start fx state-machine-id (UUID/randomUUID) nil))
+  ([fx state-machine-id input] (start fx state-machine-id (UUID/randomUUID) input))
+  ([fx state-machine-id execution-id input]
    (if-let [state-machine (s/debug-assert-statem
                            (if (vector? state-machine-id)
                              (fetch-statem fx (first state-machine-id) (second state-machine-id))
@@ -113,19 +115,19 @@
      (let [now                   (now!)
            execution             (empty-execution {:execution-id    execution-id
                                                    :state-machine   state-machine
-                                                   :initial-context (if (nil? initial-context)
-                                                                      (eval-action (:state-machine/context state-machine)
-                                                                                   fx
-                                                                                   no-io
-                                                                                   nil
-                                                                                   input)
-                                                                      initial-context)
+                                                   :initial-context (eval-action (:state-machine/context state-machine)
+                                                                                 fx
+                                                                                 no-io
+                                                                                 nil
+                                                                                 input)
                                                    :input           input
                                                    :now             now})
+           input                 (:execution/input input)
            {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
-       (if error
-         [false nil {:error error}]
-         (begin fx state-machine execution input)))
+       (cond
+         error        [false nil {:error error}]
+         (nil? begin) [false nil {:error "invalid executor"}]
+         :else        (begin fx state-machine execution input)))
      [false nil {:error ::state-machine-not-found}])))
 
 (defn trigger
@@ -197,23 +199,6 @@
               (recur (dec attempt)
                      (fetch-execution fx (:execution/id execution) (:execution/version execution))))))))))
 
-(defn- can-continue? [state-machine execution input]
-  (and (= "paused" (:execution/status execution))
-       (let [node (get (:state-machine/states state-machine) (:execution/state execution))]
-         (or
-          (::action input)
-          (seq (:always node))
-          (contains? node :return)))))
-
-(defn- maybe-return-execution! [fx execution]
-  (when (#{"failed" "finished"} (:execution/status execution))
-    (let [[eid action] (:execution/return-target execution)]
-      (when (and eid action)
-        (trigger fx eid (merge (:execution/return-data execution)
-                               {::action action
-                                ::cause  {:execution [eid (:execution/status execution)]
-                                          :result         (:execution/return-data execution)}}))))))
-
 (defn- random-uuid [] (UUID/randomUUID))
 (defn- make-cofx [fx io]
   {:eval-expr!           (fn eval-expr!
@@ -247,7 +232,7 @@
               input     input]
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               ;; TODO(jeff): save intermediate executions (under (map second transitions))
                tx                     (save-execution fx next-execution)]
            (if stop?
              (if (:ok @tx)
@@ -275,21 +260,30 @@
            (empty? (:execution/completed-effects execution)))))
 
 (defn- step-execution! [cofx fx state-machine execution input]
-  ;; advances the execution, running side effects if needed
+  ;; Advances the execution, running side effects if needed
+  ;;
+  ;; Pipeline: Trigger/Step -(1-to-many)-> Pending Effects -(1-to-many)-> Completed Effects
+  ;;
+  ;; Algorithm:
+  ;;  1. Run any incoming input trigger
+  ;;  2. Execution any pending effects
+  ;;     TODO(jeff): we should process pending effects one at a time
+  ;;  3. Process any completion effects
+  ;;  4. Automate decision making
   (cond
     ;; we're processing an action that has input from a trigger
     input
-    (let [{:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
-                                                                         (set/rename-keys input {::action ::core/action
-                                                                                                 ::resume ::core/resume}))
-          now                                       (now!)
-          next-execution                            (-> (:execution result)
-                                                        (assoc :execution/error error
-                                                               :execution/step-ended-at now
-                                                               :execution/comment "Processed step")
-                                                        (update :execution/pending-effects (fnil into []) effects))
-          stop?                                     (should-stop? next-execution effects error)
-          _ (prn "STOP?" stop?)]
+    (let [{:keys [effects transitions error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                              (set/rename-keys input {::action ::core/action
+                                                                                                      ::resume ::core/resume}))
+          now                                            (now!)
+          next-execution                                 (-> (:execution result)
+                                                             (assoc :execution/error error
+                                                                    :execution/debug transitions
+                                                                    :execution/step-ended-at now
+                                                                    :execution/comment "Processed step")
+                                                             (update :execution/pending-effects (comp not-empty (fnil into [])) effects))
+          stop?                                          (should-stop? next-execution effects error)]
       [stop? (cond-> next-execution
                stop? (assoc :execution/finished-at now))])
 
@@ -298,7 +292,7 @@
     (:execution/pending-effects execution)
     [false ;; now's not the time to stop
      (with-effects fx state-machine execution
-       (reduce (fn [execution {:keys [op args complete-ref]}]
+       (reduce (fn [execution {:keys [op args complete-ref] :as ef}]
                  (let [ret (try
                              ;; TODO(jeff): ops should validate args
                              ;; TODO(jeff): move this case into protocol namespace
@@ -309,7 +303,7 @@
                                                       [ok execution-id execution]
                                                       (start fx state-machine-id execution-id input)]
                                                   (when async?
-                                                    (merge execution
+                                                    (merge (when execution {:execution execution})
                                                            {:error        (if ok nil {:code   :error
                                                                                       :reason "failed to start"})
                                                             :execution/id execution-id})))
@@ -326,7 +320,16 @@
                                                      (async/timeout 10000) {:error {:code   :timed-out
                                                                                     :reason "waiting for result to trigger execution has timed out"}}
                                                      result ([x] x))))
-                               :execution/return nil ;; TODO(jeff): record this?
+                               :execution/return (let [to           (:to args)
+                                                       return-value (:result args)]
+                                                   (try
+                                                     (doseq [[execution-id complete-id] to]
+                                                       (enqueue-execution fx execution-id {::resume {:id     complete-id
+                                                                                                     :return return-value}
+                                                                                           ::reply? false}))
+                                                     (catch Throwable t
+                                                       (locking *out*
+                                                         (.printStackTrace t)))))
                                :invoke/io        (let [{:keys [input expr]} args]
                                                    (try
                                                      (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
@@ -355,44 +358,48 @@
                                         :throwable (Throwable->map t)}}))]
                    (cond-> (-> execution
                                (assoc :execution/step-ended-at (now!)
-                                      :execution/comment "Ran effects")
+                                      :execution/comment (format "Ran effects"))
                                (update :execution/pending-effects next))
-                     complete-ref (update :execution/completed-effects (fnil conj [])
-                                          {::core/resume {:id     complete-ref
-                                                          :return (assoc ret :ok (boolean (:error ret)))}}))))
+                     (and ret complete-ref) (update :execution/completed-effects (fnil conj [])
+                                                    {::resume {:id     complete-ref
+                                                               :op     op
+                                                               :return (assoc ret :ok (let [err (:error ret)]
+                                                                                        (boolean (not err))))}}))))
                execution
                (:execution/pending-effects execution)))]
 
     ;; advance the state machine based on effects that have completed that the
     ;; execution wants to be notified about success/failure
     (:execution/completed-effects execution)
-    (let [result                                    (first (:execution/completed-effects execution))
-          {:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
-                                                                         (set/rename-keys input {::action ::core/action
-                                                                                                 ::resume ::core/resume}))
-          now                                       (now!)
-          next-execution                            (-> (:execution result)
-                                                        (assoc :execution/error error
-                                                               :execution/pending-effects effects
-                                                               :execution/step-ended-at now
-                                                               :execution/comment "Processed effect result")
-                                                        (update :execution/completed-effects (comp not-empty subvec) 1))
-          stop?                                     (should-stop? next-execution effects error)]
+    (let [effect-result                                  (first (:execution/completed-effects execution))
+          {:keys [effects transitions error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                              (set/rename-keys effect-result {::action ::core/action
+                                                                                                              ::resume ::core/resume}))
+          now                                            (now!)
+          next-execution                                 (-> (:execution result)
+                                                             (assoc :execution/error error
+                                                                    :execution/pending-effects effects
+                                                                    :execution/step-ended-at now
+                                                                    :execution/debug transitions
+                                                                    :execution/comment "Processed effect result")
+                                                             (update :execution/completed-effects (comp not-empty subvec) 1))
+          stop?                                          (should-stop? next-execution effects error)]
       [stop? (cond-> next-execution
                stop? (assoc :execution/finished-at now))])
 
     ;; advance possibly an automated state machine advance
     :else
-    (let [{:keys [effects action error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
-                                                                         (set/rename-keys input {::action ::core/action
-                                                                                                 ::resume ::core/resume}))
-          now                                       (now!)
-          next-execution                            (assoc (:execution result)
-                                                           :execution/error error
-                                                           :execution/pending-effects effects
-                                                           :execution/step-ended-at now
-                                                           :execution/comment "Processed step")
-          stop?                                     (should-stop? next-execution effects error)]
+    (let [{:keys [effects transitions error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+                                                                              (set/rename-keys input {::action ::core/action
+                                                                                                      ::resume ::core/resume}))
+          now                                            (now!)
+          next-execution                                 (assoc (:execution result)
+                                                                :execution/error error
+                                                                :execution/pending-effects effects
+                                                                :execution/step-ended-at now
+                                                                :execution/debug transitions
+                                                                :execution/comment "Processed step")
+          stop?                                          (should-stop? next-execution effects error)]
       [stop? (cond-> next-execution
                stop? (assoc :execution/finished-at now))])))
 
@@ -419,7 +426,7 @@
               input     input]
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               ;; TODO(jeff): save intermediate executions (under (map second transitions))
                tx                     (save-execution fx next-execution)]
            (if stop?
              (if (:ok @tx)
@@ -456,7 +463,7 @@
               input     input]
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second actions))
+               ;; TODO(jeff): save intermediate executions (under (map second transitions))
                tx                     (save-execution fx next-execution)]
            (if stop?
              (if (:ok @tx)
@@ -500,7 +507,7 @@
        timeout
        (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
              _                      (reset! latest-execution execution)
-             ;; TODO(jeff): save intermediate executions (under (map second actions))
+             ;; TODO(jeff): save intermediate executions (under (map second transitions))
              tx                     @(save-execution fx next-execution)]
          (if stop?
            (if (:ok tx)
@@ -557,4 +564,5 @@
              (step fx state-machine execution input))))
        (catch Throwable t
          (.printStackTrace t))))))
+
 

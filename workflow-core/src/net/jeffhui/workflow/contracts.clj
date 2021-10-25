@@ -15,7 +15,8 @@
             (testing "save-statem returns a future that saves the state machine"
               (let [r (api/save-statem persistence order-statem)]
                 (is (future? r) "save-statem should return a future")
-                (is (:ok (deref r 1000 :timeout)) "save-statem should succeed")
+                (let [result (deref r 1000 :timeout)]
+                  (is (:ok result) (format "save-statem should succeed: %s" (pr-str result))))
                 (is (= order-statem (:entity (deref r 1000 :timeout))))))
 
             (testing "fetch-statem returns previously stored state machines"
@@ -132,10 +133,15 @@
               (is (= (seq [execution2-started]) (api/fetch-execution-history persistence (:execution/id execution2-started)))
                   "persistence should return a one execution historical value for execution2"))
             (testing "executions-for-statem returns a seq of executions for a given statem, ordered by latest started-at"
-              (is (= (seq [execution2-started execution-step]) (api/executions-for-statem persistence
-                                                                                          (:execution/state-machine-id execution-step)
-                                                                                          {:version (:execution/state-machine-version execution-step)}))
-                  "persistence should return 2 executions when fetching by state machine")))
+              (let [result (api/executions-for-statem persistence
+                                                      (:execution/state-machine-id execution-step)
+                                                      {:version (:execution/state-machine-version execution-step)})
+                    expected [execution2-started execution-step]]
+                (is (= (map (juxt :execution/id :execution/version) expected)
+                       (map (juxt :execution/id :execution/version) result))
+                    "persistence should return 2 executions when fetching by state machine")
+                (is (= (seq expected) result)
+                    "persistence should return 2 executions when fetching by state machine"))))
 
           (testing "[exceptional cases]"
             (testing "errors with duplicate execution versions"
@@ -343,34 +349,30 @@
               (print-executions fx "order")))))))))
 
 (def ^:private execution-started
-  #:execution{:comment               "Enqueued for execution"
-              :event-name            nil
-              :event-data            nil
-              :id                    #uuid "3DB0A06E-7F9C-445A-B327-CE9B4EEC9E53"
-              :version               1
-              :state-machine-id      "order"
-              :state-machine-version 1
-              :io                    nil
-              :mode                  "async-throughput"
-              :status                "queued"
-              :state                 "create"
-              :memory                {:order {:id "R4523"}}
-              :input                 nil
-              :enqueued-at           (System/nanoTime)
-              :started-at            nil
-              :finished-at           nil
-              :failed-at             nil
-              :step-started-at       nil
-              :step-ended-at         nil
-              :user-started-at       nil
-              :user-ended-at         nil
-              :error                 nil
-              :return-target         nil
-              :wait-for              nil
-              :return-data           nil
-              :end-state             nil
-              :dispatch-result       nil
-              :dispatch-by-input     nil})
+  #:execution{:version               1,
+              :finished-at           nil,
+              :state                 "created",
+              :pause-state           "ready",
+              :failed-at             nil,
+              :state-machine-id      "shipment",
+              :comment               "Enqueued for execution",
+              :error                 nil,
+              :started-at            nil,
+              :input                 {:order                               "R10322",
+                                      :net.jeffhui.workflow.core/return-to [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"]},
+              :user-ended-at         nil,
+              :return-to             [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"],
+              :memory                {:id "S1", :order "R10322", :delivered false},
+              :mode                  "async-throughput",
+              :step-ended-at         nil,
+              :completed-effects     nil,
+              :pending-effects       nil,
+              :enqueued-at           2142448849340983,
+              :user-started-at       nil,
+              :state-machine-version 1,
+              :step-started-at       nil,
+              :id                    #uuid "861d1e22-4f63-45f6-80d3-46c00b6af66e",
+              :pause-memory          nil})
 
 (def ^:private execution2-started
   (assoc execution-started
@@ -379,34 +381,29 @@
          :execution/enqueued-at (System/nanoTime)))
 
 (def ^:private execution-step
-  #:execution{:comment               "Resuming execution (create) on :example"
-              :event-name            nil
-              :event-data            nil
-              :id                    #uuid "3DB0A06E-7F9C-445A-B327-CE9B4EEC9E53"
-              :version               2
-              :state-machine-id      "order"
-              :state-machine-version 1
-              :io                    nil
-              :mode                  "async-throughput"
-              :status                "running"
-              :state                 "create"
-              :memory                {:order {:id "R4523"}}
-              :input                 nil
-              :enqueued-at           (System/nanoTime)
-              :started-at            nil
-              :finished-at           nil
-              :failed-at             nil
-              :step-started-at       (+ 10 (System/nanoTime))
-              :step-ended-at         nil
-              :user-started-at       nil
-              :user-ended-at         nil
-              :error                 nil
-              :return-target         nil
-              :wait-for              nil
-              :return-data           nil
-              :end-state             nil
-              :dispatch-result       nil
-              :dispatch-by-input     nil})
+  #:execution{:version               2,
+              :finished-at           nil,
+              :state                 "created",
+              :pause-state           "ready",
+              :failed-at             nil,
+              :state-machine-id      "shipment",
+              :comment               "Resuming execution (created) on async-thread-macro-2",
+              :error                 nil,
+              :started-at            2142448849969446,
+              :input                 nil,
+              :user-ended-at         nil,
+              :return-to             [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"],
+              :memory                {:id "S1", :order "R10322", :delivered false},
+              :mode                  "async-throughput",
+              :step-ended-at         nil,
+              :completed-effects     nil,
+              :pending-effects       nil,
+              :enqueued-at           2142448849340983,
+              :user-started-at       nil,
+              :state-machine-version 1,
+              :step-started-at       2142448849969446,
+              :id                    #uuid "861d1e22-4f63-45f6-80d3-46c00b6af66e",
+              :pause-memory          nil})
 
 (def wishlist-statem
   #:state-machine{:id             "wishlist"
@@ -414,19 +411,19 @@
                   :start-at       "idle"
                   :execution-mode "async-throughput"
                   :context        {:items #{}}
-                  :states         '{"idle" {:actions {"add"     {:name    "added"
-                                                                 :state   "idle"
-                                                                 :context (update ctx :items (fnil conj #{}) (:sku input))}
-                                                      "remove"  {:name    "removed"
-                                                                 :state   "idle"
-                                                                 :context (update ctx :items disj (:sku input))}
-                                                      "convert" {:name   "created-order"
-                                                                 :state  "idle"
-                                                                 :invoke {:state-machine ["prepare-cart" 1]
-                                                                          :async?        true
-                                                                          :input         {:skus (:items ctx)}
-                                                                          :success       {}
-                                                                          :error         {}}}}}}})
+                  :states         '{"idle" {:actions [{:id      "add"
+                                                       :when    "add"
+                                                       :context (update ctx :items (fnil conj #{}) (:sku input))}
+                                                      {:id      "removed"
+                                                       :when    "remove"
+                                                       :context (update ctx :items disj (:sku input))}
+                                                      {:id     "create-order"
+                                                       :when   "create-order"
+                                                       :invoke {:state-machine ["prepare-cart" 1]
+                                                                :async?        true
+                                                                :input         {:skus (:items ctx)}
+                                                                :success       {}
+                                                                :error         {}}}]}}})
 
 (def prepare-cart-statem
   #:state-machine{:id             "prepare-cart"
@@ -436,29 +433,30 @@
                   :timeout-msec   5000
                   :context        '{:requirements (set (:skus input))
                                     :left         (set (:skus input))}
-                  :states         '{"start"    {:always [{:name   "create-cart"
-                                                          :id     "create-cart"
-                                                          :invoke {:state-machine ["order" 1]
-                                                                   :async?        true
-                                                                   :success       {:state   "adding"
-                                                                                   :context (assoc ctx :order-eid (:execution/id output))}
-                                                                   :error         {:state "failed"}}}]}
-                                    "adding"   {:always [{:name   "added"
-                                                          :id     "adding"
-                                                          :when   (seq (:left ctx))
-                                                          :invoke {:trigger [(:order-eid ctx) "add"]
-                                                                   :input   {:sku (first (:left ctx))
-                                                                             :qty 1}
-                                                                   :success {:state   "complete"
-                                                                             :context (-> ctx
-                                                                                          (update :left disj (first (:left ctx)))
-                                                                                          (assoc :last-output output))}
-                                                                   :error   {:state "failed"}}}
-                                                         {:name  "complete"
-                                                          :state "complete"}]}
+                  :states         '{"start"    {:actions [{:id     "create-cart"
+                                                           :invoke {:state-machine ["order" 1]
+                                                                    :async?        true
+                                                                    :success       {:state   "adding"
+                                                                                    :context (assoc ctx :order-eid (:execution/id output))}
+                                                                    :error         {:state "failed"}}}]}
+                                    "adding"   {:actions [{:id     "adding"
+                                                           :when   (seq (:left ctx))
+                                                           :invoke {:trigger [(:order-eid ctx) "add"]
+                                                                    :input   {:sku (first (:left ctx))
+                                                                              :qty 1}
+                                                                    :state   "added"
+                                                                    :context (assoc ctx :last-output output)}}
+                                                          {:name  "complete"
+                                                           :state "complete"}]}
+                                    "added"    {:actions [{:id   "decide"
+                                                           :if   (:ok (:last-output ctx))
+                                                           :then {:id      "complete"
+                                                                  :state   "complete"
+                                                                  :context (update ctx :left disj (first (:left ctx)))}
+                                                           :else {:id    "failed"
+                                                                  :state "failed"}}]}
                                     "complete" {:return {:ok true}}
                                     "failed"   {:return {:ok false}}}})
-
 
 (def order-statem
   #:state-machine{:id             "order"
@@ -500,17 +498,19 @@
 
                                     "fraud-approved" {:actions [{:id    "release"
                                                                  :state "released"}]}
-                                    "fraud-rejected" {:actions {"cancel" {:state "canceled"}}}
+                                    "fraud-rejected" {:actions [{:id "cancel"
+                                                                 :when "cancel"
+                                                                 :state "canceled"}]}
                                     "released"       {:actions [{:id     "ship"
                                                                  :invoke {:state-machine ["shipment" 1]
                                                                           :input         {:order (:id (:order ctx))}
-                                                                          :context       (assoc ctx {:output output})
+                                                                          :context       (assoc ctx :output output)
                                                                           :state         "finished-ship"}}]}
                                     "finished-ship"  {:actions [{:id    "fulfilled"
-                                                                :when  (:delivered (:output ctx))
-                                                                :state "shipped"}
-                                                               {:id    "canceled"
-                                                                :state "canceled"}]}
+                                                                 :when  (:delivered (:value (:output ctx)))
+                                                                 :state "shipped"}
+                                                                {:id    "canceled"
+                                                                 :state "canceled"}]}
                                     "shipped"        {:return true}
                                     "canceled"       {:return false}}})
 
@@ -525,13 +525,12 @@
                   :states         '{"created"     {:actions [{:id    "fulfilled"
                                                               :state "outstanding"}]}
                                     "outstanding" {:actions [{:id     "fetch"
-                                                              :invoke {:call (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
+                                                              :invoke {#_#_:call (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
+                                                                       :call     {:status 200 :body {:json {:n (rand-int 10)}}}
 
-                                                                       :if   (and (:status output) (<= 200 (:status output) 299))
-                                                                       :then {:state   "fetched"
-                                                                              :context (assoc ctx :response {:status (:status output)
-                                                                                                             :n      (:n (:json (:body output)))})}
-                                                                       :else {:state "failed"}}}
+                                                                       :state   "fetched"
+                                                                       :context (assoc ctx :response {:status (when (:ok output) (:status (:value output)))
+                                                                                                      :n      (:n (:json (:body (:value output))))})}}
                                                              {:id    "cancel"
                                                               :when  "cancel"
                                                               :state "canceled"}]}
@@ -541,19 +540,19 @@
 
                                     "canceled" {:return {:delivered false}}
 
-                                    "fetched" {:always [{:name    "deliver"
-                                                         :state   "delivered"
-                                                         :when    (let [res (:response ctx)]
-                                                                    (and (:status res)
-                                                                         (<= 200 (:status res) 299)
-                                                                         (:n res)
-                                                                         (> 3 (:n res))))
-                                                         :context {:response nil
-                                                                   :result   (:n (:response ctx))}}
-                                                        {:name     "retry"
-                                                         :state    "outstanding"
-                                                         :context  {:response nil}
-                                                         :wait-for {:seconds 5}}]}
+                                    "fetched" {:actions [{:id      "deliver"
+                                                          :state   "delivered"
+                                                          :when    (let [res (:response ctx)]
+                                                                     (and (:status res)
+                                                                          (<= 200 (:status res) 299)
+                                                                          (:n res)
+                                                                          (> 3 (:n res))))
+                                                          :context {:response nil
+                                                                    :result   (:n (:response ctx))}}
+                                                         {:id       "retry"
+                                                          :state    "outstanding"
+                                                          :context  {:response nil}
+                                                          :wait-for {:seconds 5}}]}
 
                                     "delivered" {:return {:delivered true}}}})
 

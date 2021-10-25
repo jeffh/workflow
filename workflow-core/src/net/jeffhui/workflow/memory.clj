@@ -183,19 +183,19 @@
     (do
       (def out (wf/start fx "prepare-cart" {:skus #{"A1" "B2"}})))
     (do
-        (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
-                                                                      {:status 200
-                                                                       :body   (:json-body res)})}}))
-        (wf/trigger fx (second out) {::wf/action "add"
-                                     ::wf/reply? true
-                                     :sku        "bns12"
-                                     :qty        1})
-        #_(Thread/sleep 100)
-        (wf/trigger fx (second out) {::wf/action "place"})
-        #_(Thread/sleep 100)
-        (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
-                                              ::wf/reply? true}))
-        (async/take! res prn)))
+      (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
+                                                                    {:status 200
+                                                                     :body   (:json-body res)})}}))
+      (wf/trigger fx (second out) {::wf/action "add"
+                                   ::wf/reply? true
+                                   :sku        "bns12"
+                                   :qty        1})
+      #_(Thread/sleep 100)
+      (wf/trigger fx (second out) {::wf/action "place"})
+      #_(Thread/sleep 100)
+      (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
+                                            ::wf/reply? true}))
+      (async/take! res prn)))
 
   out
 
@@ -211,24 +211,44 @@
                                [:execution/state-machine-id
                                 :execution/state
                                 :execution/pause-state
-                                :execution/event-name
+                                :execution/pending-effects
+                                :execution/completed-effects
                                 :execution/comment
                                 :execution/input
                                 :t
-                                :execution/error
+                                #_:execution/error
                                 :execution/memory])))
          (take 100
                (mapcat #(wf/fetch-execution-history fx (:execution/id %))
                        (wf/executions-for-statem fx "order" {:version :latest}))))))
 
-  (take 50
-        (mapcat #(wf/fetch-execution-history fx (:execution/id %))
-                (wf/executions-for-statem fx "prepare-cart" {:version :latest})))
+  (take 2
+        (take 100
+              (mapcat #(wf/fetch-execution-history fx (:execution/id %))
+                      (wf/executions-for-statem fx "order" {:version :latest}))))
 
   (wf/fetch-execution fx (second out) :latest)
 
+  (do
+    (require 'clojure.inspector)
+    (clojure.inspector/inspect-tree
+     (sort-by (juxt :execution/state-machine-id :execution/version)
+              (take 100
+                    (mapcat #(wf/fetch-execution-history fx (:execution/id %))
+                            (wf/executions-for-statem fx "order" {:version :latest}))))))
+
+  (def res
+    (take 10
+          (sort-by :execution/version
+                   (take 100
+                         (filter (fn [e] (< (:execution/version e) 100))
+                                 (filter (comp #{"shipment"} :execution/state-machine-id)
+                                         (mapcat vals (vals @(:state (:execution-persistence fx))))))))))
+
+  (map (comp (juxt identity #(map meta %)) :execution/debug) res)
+
   (clojure.pprint/print-table
-   (take 50
+   (take 10
          (sort-by :execution/version
                   (vals (get @(:state (:execution-persistence fx)) (second out))))))
 

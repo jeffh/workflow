@@ -31,8 +31,8 @@
 
 (def eval-allows
   (into
-   '[let if cond and or not seq
-     persistent! transient conj! disj! assoc! dissoc!
+   '[let if cond and or not seq when when-not do
+     persistent! transient conj! disj! assoc! dissoc! prn
      > >= = < <= not= zero? pos? neg? even? odd? true? false? nil?
      -> ->> cond-> as-> cond->> some-> some->> comp partial juxt fnil
      assoc assoc-in update update-in get get-in merge dissoc
@@ -80,7 +80,11 @@
                                    (when (not= ::p/nothing output)
                                      {'output output}))))
     (catch Exception e
-      (throw (ex-info "Failed to interpret action" {:code edn-expr :output? (not= ::p/nothing output)} e)))))
+      (throw (ex-info "Failed to interpret action" {:code   edn-expr
+                                                    :input  input
+                                                    :output (when (not= ::p/nothing output)
+                                                              output)}
+                      e)))))
 
 (defn clj-eval-action [edn-expr io context input output]
   (try

@@ -17,7 +17,7 @@
 (defn- then [^CompletableFuture cf f]
   (.thenApply cf (reify Function (apply [_ t] (f t)))))
 
-(def ^:private http-client 
+(def ^:private http-client
   (delay (-> (HttpClient/newBuilder)
              (.followRedirects HttpClient$Redirect/NORMAL)
              (.connectTimeout (Duration/ofSeconds (long 15)))
