@@ -44,17 +44,18 @@
                     (:state-machine/version (p/fetch-statem statem-persistence state-machine-id version))
                     version)]
       ;; TODO(jeff): we should filter by state-machine-id, but it's so much easier to dump all for debugging
-      (cond->>
-       (reverse (sort-by
-                 :execution/started-at
-                 (map last
-                      (vals
-                       (group-by :execution/id
-                                 (cond
-                                   (= -1 version) nil
-                                   (= :all version) (mapcat vals (vals s))
-                                   (integer? version) (filter (comp #{version} :execution/state-machine-version)
-                                                              (mapcat vals (vals s)))))))))
+      (cond->> (->>
+                (group-by :execution/id
+                          (cond
+                            (= -1 version) nil
+                            (= :all version) (mapcat vals (vals s))
+                            (integer? version) (filter (comp #{version} :execution/state-machine-version)
+                                                       (mapcat vals (vals s)))))
+                (vals)
+                (map last)
+                (filter (comp #{state-machine-id} :execution/state-machine-id))
+                (sort-by (juxt :execution/state-machine-id :execution/state-machine-version :execution/id :execution/version))
+                reverse)
         offset (drop offset)
         limit (take limit))))
   (fetch-execution [_ execution-id version]

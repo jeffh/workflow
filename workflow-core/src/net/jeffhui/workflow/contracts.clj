@@ -71,12 +71,13 @@
             (api/close persistence)))))))
 
 
-(declare execution-started execution-step execution2-started)
+(declare execution-started execution-step execution2-started irrelevant-execution-started)
 (defn execution-persistence [doc-name creator]
   (testing doc-name
     (testing "conforms to execution persistence"
       (let [persistence (api/open (creator))]
         (try
+          (deref (protocol/save-execution persistence irrelevant-execution-started) 10000 :timeout)
           (testing "[happy path - 1 execution; 1 step]"
             (testing "save-execution returns a future that saves the execution"
               (let [r (protocol/save-execution persistence execution-started)]
@@ -378,6 +379,13 @@
   (assoc execution-started
          :execution/id #uuid "7545E6ED-7151-4E0B-B60D-1972AE614D97"
          :execution/memory {:order {:id "R5232"}}
+         :execution/enqueued-at (System/nanoTime)))
+
+(def ^:private irrelevant-execution-started
+  (assoc execution-started
+         :execution/state-machine-id "another-state-machine"
+         :execution/id #uuid "DEA7115B-D3B3-485B-83E4-D6EE339897F7"
+         :execution/memory {:order {:id "R6322"}}
          :execution/enqueued-at (System/nanoTime)))
 
 (def ^:private execution-step
