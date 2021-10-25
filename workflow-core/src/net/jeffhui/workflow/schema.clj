@@ -95,17 +95,17 @@
                                                [:state-machine [:tuple Code Code]]
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
-                                               [:state {:optional true} State]
+                                               [:state State]
                                                [:context {:optional true} Code]]
                                               [:map ;; Trigger Execution
                                                [:execution [:tuple Code Code]]
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
-                                               [:state {:optional true} State]
+                                               [:state State]
                                                [:context {:optional true} Code]]
                                               [:map ;; IO call
                                                [:call Code]
-                                               [:state {:optional true} State]
+                                               [:state State]
                                                [:context {:optional true} Code]]]]]
                        ::transition [:or
                                      [:ref ::std-transition]
