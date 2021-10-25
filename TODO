@@ -1,18 +1,27 @@
 [ ] Cleanup
-  [ ] Do transitions need IDs?
-  [ ] Is it worth for transitions to have names?
-  [ ] Remove :execution/event-metadata
+  [~] Do transitions need IDs? -> yes
+  [x] Is it worth for transitions to have names? -> No
+  [x] Remove :execution/event-metadata
   [ ] Remove :execution/comment
 [ ] Organization
   [x] Namespacing to more unique reverse domain
   [x] Merge :end true and :return <Code>
   [ ] Smaller dependencies
 [ ] Features
-  [ ] "Catch" exceptions
-  [ ] Trigger a step of a state machine from another state machine
+  [~] "Catch" exceptions -> have an if transition that forces output capturing
+  [x] Trigger a step of a state machine from another state machine
   [ ] Streaming execution to another state machine
   [~] Retry failed executions -- NOTE(jeff): this can be done in a state machine or part of "catch" exceptions
   [ ] Upgrading Executions to new State Machine versions
+  [ ] IO
+    [ ] Can be mocked/replaced without modifying the state machine or execution
+    [x] IO can only be used in specific transition
+    [ ] All IO failures are reported back to the state machine
+    [ ] Idempotency behavior for IO
+  [ ] Validations
+    [x] transition ids must be unique within a state
+    [x] transition when must be unique within a state
+    [ ] transitions that specify a state to jump to must exist within the state machine
   [ ] Consider Input handling?
     [ ] Queues
     [ ] HTTP
