@@ -61,7 +61,7 @@
 (def ^:private allowed
   (-> eval-allows
       (into eval-nonterminating)
-      (into '[io ctx input output])))
+      (into '[io ctx input output *ctx* *input* *output*])))
 
 (def ^:private options
   {:allow       allowed
@@ -74,11 +74,14 @@
     (sci/eval-string (pr-str edn-expr)
                      (assoc options :bindings
                             (merge eval-bindings
-                                   {'io    io
-                                    'ctx   context
-                                    'input input}
+                                   {'io      io
+                                    'ctx     context
+                                    'input   input
+                                    '*ctx*   context
+                                    '*input* input}
                                    (when (not= ::p/nothing output)
-                                     {'output output}))))
+                                     {'output   output
+                                      '*output* output}))))
     (catch Exception e
       (throw (ex-info "Failed to interpret action" {:code   edn-expr
                                                     :input  input
@@ -88,12 +91,16 @@
 
 (defn clj-eval-action [edn-expr io context input output]
   (try
-    (eval `(let [~'io    ~io
-                 ~'ctx   ~context
-                 ~'input ~input]
+    (eval `(let [~'io      ~io
+                 ~'ctx     ~context
+                 ~'input   ~input
+                 ~'*io*    ~'io
+                 ~'*ctx*   ~'ctx
+                 ~'*input* ~'input]
              ~(if (= ::p/nothing output)
                 edn-expr
-                `(let [~'output ~output]
+                `(let [~'output   ~output
+                       ~'*output* ~'output]
                    ~edn-expr))))
     (catch Exception e
       (throw (ex-info "Failed to interpret action" {:code edn-expr} e)))))
