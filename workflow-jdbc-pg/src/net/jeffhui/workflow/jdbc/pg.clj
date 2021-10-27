@@ -56,11 +56,9 @@
 	state_machine_id TEXT NOT NULL,
 	state_machine_version BIGINT NOT NULL,
 	mode TEXT NOT NULL,
-	status TEXT,
 	state TEXT,
-	memory BYTEA,
-	input BYTEA,
-  io BYTEA,
+	pause_state TEXT,
+  encoded BYTEA,
 	enqueued_at BIGINT,
 	started_at BIGINT,
 	finished_at BIGINT,
@@ -70,15 +68,7 @@
 	user_started_at BIGINT,
 	user_ended_at BIGINT,
 	error BYTEA,
-	wait_for BYTEA,
-	return_target BYTEA,
-	return_data BYTEA,
 	comment TEXT,
-	event_name TEXT,
-	event_data BYTEA,
-	dispatch_result BYTEA,
-	dispatch_by_input BYTEA,
-	end_state TEXT,
 	PRIMARY KEY (id, version)
   );
   CREATE INDEX IF NOT EXISTS workflow_executions_statem ON workflow_executions (state_machine_id, state_machine_version, started_at);"]))
@@ -97,47 +87,7 @@
      (map #(update % :state-machine/states nippy/fast-thaw)))))
 
 (defn- db->execution-txfm []
-  (let [field->key {:id                    :execution/id
-                    :version               :execution/version
-                    :state_machine_id      :execution/state-machine-id
-                    :state_machine_version :execution/state-machine-version
-                    :mode                  :execution/mode
-                    :status                :execution/status
-                    :state                 :execution/state
-                    :memory                :execution/memory
-                    :input                 :execution/input
-                    :io                    :execution/io
-                    :enqueued_at           :execution/enqueued-at
-                    :started_at            :execution/started-at
-                    :finished_at           :execution/finished-at
-                    :failed_at             :execution/failed-at
-                    :step_started_at       :execution/step-started-at
-                    :step_ended_at         :execution/step-ended-at
-                    :user_started_at       :execution/user-started-at
-                    :user_ended_at         :execution/user-ended-at
-                    :error                 :execution/error
-                    :wait_for              :execution/wait-for
-                    :return_target         :execution/return-target
-                    :return_data           :execution/return-data
-                    :comment               :execution/comment
-                    :event_name            :execution/event-name
-                    :event_data            :execution/event-data
-                    :dispatch_result       :execution/dispatch-result
-                    :dispatch_by_input     :execution/dispatch-by-input
-                    :end_state             :execution/end-state}]
-    (comp
-     (map #(set/rename-keys % field->key))
-     (map #(select-keys % (vals field->key)))
-     (map #(update % :execution/memory nippy/fast-thaw))
-     (map #(update % :execution/input nippy/fast-thaw))
-     (map #(update % :execution/io nippy/fast-thaw))
-     (map #(update % :execution/error nippy/fast-thaw))
-     (map #(update % :execution/wait-for nippy/fast-thaw))
-     (map #(update % :execution/return-target nippy/fast-thaw))
-     (map #(update % :execution/return-data nippy/fast-thaw))
-     (map #(update % :execution/event-data nippy/fast-thaw))
-     (map #(update % :execution/dispatch-result nippy/fast-thaw))
-     (map #(update % :execution/dispatch-by-input nippy/fast-thaw)))))
+  (map (comp nippy/fast-thaw :encoded)))
 
 (defn- resolve-statem-version [conn state-machine-id version]
   (if (= :latest version)
@@ -157,21 +107,33 @@
   (with-open [conn (jdbc/get-connection ds)]
     (try
       (record jdbc/execute! conn ["INSERT INTO workflow_executions (
-      id, version, state_machine_id, state_machine_version, mode, status, state, memory, input, io,
-      enqueued_at, started_at, finished_at, failed_at, step_started_at, step_ended_at,
-      user_started_at, user_ended_at, error, wait_for, return_target, return_data, comment, event_name, event_data,
-      dispatch_result, dispatch_by_input, end_state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      id,
+      version,
+      state_machine_id,
+      state_machine_version,
+      mode,
+      state,
+      pause_state,
+      encoded,
+      enqueued_at,
+      started_at,
+      finished_at,
+      failed_at,
+      step_started_at,
+      step_ended_at,
+      user_started_at,
+      user_ended_at,
+      error,
+      comment
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                   (:execution/id execution)
                                   (:execution/version execution)
                                   (:execution/state-machine-id execution)
                                   (:execution/state-machine-version execution)
                                   (:execution/mode execution)
-                                  (:execution/status execution)
                                   (:execution/state execution)
-                                  (nippy/fast-freeze (:execution/memory execution))
-                                  (nippy/fast-freeze (:execution/input execution))
-                                  (nippy/fast-freeze (:execution/io execution))
+                                  (:execution/pause-state execution)
+                                  (nippy/fast-freeze execution)
                                   (:execution/enqueued-at execution)
                                   (:execution/started-at execution)
                                   (:execution/finished-at execution)
@@ -181,15 +143,7 @@
                                   (:execution/user-started-at execution)
                                   (:execution/user-ended-at execution)
                                   (nippy/fast-freeze (:execution/error execution))
-                                  (nippy/fast-freeze (:execution/wait-for execution))
-                                  (nippy/fast-freeze (:execution/return-target execution))
-                                  (nippy/fast-freeze (:execution/return-data execution))
-                                  (:execution/comment execution)
-                                  (:execution/event-name execution)
-                                  (nippy/fast-freeze (:execution/event-data execution))
-                                  (nippy/fast-freeze (:execution/dispatch-result execution))
-                                  (nippy/fast-freeze (:execution/dispatch-by-input execution))
-                                  (:execution/end-state execution)])
+                                  (:execution/comment execution)])
       {:ok     true
        :entity execution}
       (catch clojure.lang.ExceptionInfo ei
