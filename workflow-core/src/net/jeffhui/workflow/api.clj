@@ -156,7 +156,7 @@
        ~body)))
 
 (defn- completed-execution? [execution]
-  (let [s (:execution/status execution)]
+  (let [s (:execution/pause-state execution)]
     (or (contains? #{"failed" "waiting"} s)
         (and (= "finished" s)
              (nil? (:execution/state s))))))
@@ -531,7 +531,7 @@
   ([fx state-machine execution input]
    (save-execution fx execution {:can-fail? false})
    (let [final-execution (run-sync-execution fx "synchronous-execution" state-machine execution input)]
-     [(= "finished" (:execution/status final-execution)) (:execution/id execution) final-execution])))
+     [(= "finished" (:execution/pause-state final-execution)) (:execution/id execution) final-execution])))
 (defn- async-run
   ([fx state-machine execution] (async-run fx state-machine execution nil))
   ([fx state-machine execution input]

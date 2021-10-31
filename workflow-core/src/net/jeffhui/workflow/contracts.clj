@@ -332,6 +332,11 @@
                 (api/close ~fx-sym)))))))
 
 (defn effects [doc-name fx-options]
+  ;; TODO(jeff): FIXME
+  ;;  - test synchronouse state machine
+  ;;  - test async-throughput state machine
+  ;;  - test error in state machine definition
+  ;;  - test execution timeout / exception
   (testing doc-name
     (testing "is well integrated:"
       (with-each-fx [fx (api/effects (merge
