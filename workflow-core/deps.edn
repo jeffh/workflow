@@ -3,4 +3,4 @@
             metosin/jsonista                  {:mvn/version "0.3.3"}
             metosin/malli                     {:mvn/version "0.6.2"}}
  :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
- :aliases {:test {:extra-paths ["test"]}}}
+ :aliases {:dev {:extra-paths ["test"]}}}

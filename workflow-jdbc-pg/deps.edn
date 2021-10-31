@@ -3,4 +3,5 @@
             com.github.seancorfield/next.jdbc {:mvn/version "1.2.724"}
             com.zaxxer/HikariCP               {:mvn/version "5.0.0"}
             org.postgresql/postgresql         {:mvn/version "42.2.24"}}
- :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]}
+ :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
+ :aliases  {:dev {:extra-paths ["test"]}}}
