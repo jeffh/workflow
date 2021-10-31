@@ -1,0 +1,22 @@
+digraph "shipment_v1"{
+labelloc=t
+label="State Machine: shipment_v1"
+
+  edge [color=black]
+  "created" -> "outstanding" [label=""]
+  edge [color=black]
+  "outstanding" -> "call: {:status 200, :body {:json {:n (rand-int 10)}}}" [label="(<= (:attempt ctx) 3)"]
+  "call: {:status 200, :body {:json {:n (rand-int 10)}}}" [shape=box]
+  "outstanding" -> "fetched"
+  edge [color=firebrick3]
+  "outstanding" -> "canceled" [label="\"cancel\""]
+  edge [color=black]
+  "outstanding" -> "canceled" [label=""]
+  edge [color=black]
+  "fetched" -> "delivered" [label="(let [res (:response ctx)] (and (:status res) (<= 200 (:status res) 299) (:n res) (> 3 (:n res))))"]
+  edge [color=darkgoldenrod1]
+  "fetched" -> "outstanding" [label="Wait 5s",style=dashed]
+  "canceled" [shape=octagon];
+  "delivered" [shape=octagon];  created [shape=invtriangle];
+
+}

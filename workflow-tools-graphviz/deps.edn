@@ -1,0 +1,3 @@
+{:deps     {net.jeffhui/workflow-core {:local/root "../workflow-core"}}
+ :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
+ :aliases  {:dev {:extra-paths ["test"]}}}
