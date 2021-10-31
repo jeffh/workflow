@@ -8,6 +8,32 @@
            java.util.UUID
            java.time.Instant))
 
+(defmacro letlocals
+  "Allows local definition of variables that's useful for side-effectful sequences of code.
+
+  (letlocal
+   (bind x 1)
+   (bind y 2)
+   (identity y)
+   (+ x y))
+
+  ;; => (let [x 1 y 2 _ (identity y)] (+ x y))
+
+  NOTE: bind form must be direct child of letlocal
+  "
+  [& forms]
+  (let [tmpvar   (gensym "_")
+        bindings (mapcat
+                  identity
+                  (for [f (butlast forms)]
+                    (or (when (seq? f)
+                          (let [sym (first f)]
+                            (when (= 'bind sym)
+                              [(second f) (nth f 2)])))
+                        [tmpvar f])))]
+    `(let ~(vec bindings)
+       ~(last forms))))
+
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]
   (testing doc-name
@@ -282,32 +308,6 @@
             (async/close! queue)
             (async/close! replies)
             (api/close sch)))))))
-
-(defmacro letlocals
-  "Allows local definition of variables that's useful for side-effectful sequences of code.
-
-  (letlocal
-   (bind x 1)
-   (bind y 2)
-   (identity y)
-   (+ x y))
-
-  ;; => (let [x 1 y 2 _ (identity y)] (+ x y))
-
-  NOTE: bind form must be direct child of letlocal
-  "
-  [& forms]
-  (let [tmpvar   (gensym "_")
-        bindings (mapcat
-                  identity
-                  (for [f (butlast forms)]
-                    (or (when (seq? f)
-                          (let [sym (first f)]
-                            (when (= 'bind sym)
-                              [(second f) (nth f 2)])))
-                        [tmpvar f])))]
-    `(let ~(vec bindings)
-       ~(last forms))))
 
 (defn- print-executions [fx state-machine-id]
   (clojure.pprint/print-table
@@ -584,7 +584,6 @@
                                     "fraud-approved" {:actions [{:id    "release"
                                                                  :state "released"}]}
                                     "fraud-rejected" {:actions [{:id "cancel"
-                                                                 :when "cancel"
                                                                  :state "canceled"}]}
                                     "released"       {:actions [{:id     "ship"
                                                                  :invoke {:state-machine ["shipment" 1]
@@ -606,10 +605,12 @@
                   :execution-mode "async-throughput"
                   :context        '{:id        "S1"
                                     :order     (:order input)
-                                    :delivered false}
+                                    :delivered false
+                                    :attempt   1}
                   :states         '{"created"     {:actions [{:id    "fulfilled"
                                                               :state "outstanding"}]}
                                     "outstanding" {:actions [{:id     "fetch"
+                                                              :when   (<= (:attempt ctx) 3)
                                                               :invoke {#_#_:call (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
                                                                        :call     {:status 200 :body {:json {:n (rand-int 10)}}}
 
@@ -618,10 +619,9 @@
                                                                                                       :n      (:n (:json (:body (:value output))))})}}
                                                              {:id    "cancel"
                                                               :when  "cancel"
+                                                              :state "canceled"}
+                                                             {:id    "too-many-attempts"
                                                               :state "canceled"}]}
-                                    "failed" {:actions [{:id       "retry"
-                                                         :state    "outstanding"
-                                                         :wait-for {:seconds 5}}]}
 
                                     "canceled" {:return {:delivered false}}
 
