@@ -6,7 +6,7 @@
 [ ] Organization
   [x] Namespacing to more unique reverse domain
   [x] Merge :end true and :return <Code>
-  [ ] Smaller dependencies
+  [ ] Less dependencies
 [ ] Features
   [~] "Catch" exceptions -> have an if transition that forces output capturing
   [x] Trigger a step of a state machine from another state machine
@@ -16,7 +16,7 @@
   [ ] IO
     [ ] Can be mocked/replaced without modifying the state machine or execution
     [x] IO can only be used in specific transition
-    [ ] All IO failures are reported back to the state machine
+    [x] All IO failures are reported back to the state machine
     [ ] Idempotency behavior for IO
   [ ] Validations
     [x] transition ids must be unique within a state
@@ -26,7 +26,7 @@
     [ ] Queues
     [ ] HTTP
   [ ] Canceling execution
-  [ ] Manually stepping through an execution?
+  [~] Manually stepping through an execution? Can be done by running core
 [ ] Backends
   [ ] Schedulers / Queuing
     [x] Kafka
@@ -39,7 +39,7 @@
     [ ] Kafka? (needs research in KTables)
     [ ] DynamoDB
     [x] Postgresql
-    [ ] CockroachDB
+    [x] CockroachDB
     [ ] Cassandra
     [ ] ElasticSearch?
     [ ] Logging Aggregators?
