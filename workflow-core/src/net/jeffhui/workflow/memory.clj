@@ -51,7 +51,7 @@
                 (vals)
                 (map last)
                 (filter (comp #{state-machine-id} :execution/state-machine-id))
-                (sort-by (juxt :execution/state-machine-id :execution/state-machine-version :execution/id :execution/version))
+                (sort-by (juxt :execution/enqueued-at))
                 reverse)
         offset (drop offset)
         limit  (take limit))))

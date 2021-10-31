@@ -50,3 +50,17 @@ services:
     restart: unless-stopped
     depends_on:
       - kafka1
+  cockroachdb1:
+    # first-time db init requires this:
+    # > docker exec -it test-services_cockroachdb1_1 ./cockroach init --insecure
+    #
+    # connection info found by running
+    # > docker exec -it test-services_cockroachdb1_1 grep 'node starting' cockroach-data/logs/cockroach.log -A 11
+    image: cockroachdb/cockroach:v21.1.11
+    hostname: roach1
+    ports:
+      - "26257:26257"
+      - "8181:8080"
+    volumes:
+      - "./data/cockroachdb/roach1:/cockroach/cockroach-data"
+    command: ['start-single-node', '--insecure']

@@ -74,7 +74,7 @@
 	comment TEXT,
 	PRIMARY KEY (id, version)
   );
-  CREATE INDEX IF NOT EXISTS workflow_executions_statem ON workflow_executions (state_machine_id, state_machine_version, started_at);"]))
+  CREATE INDEX IF NOT EXISTS workflow_executions_statem ON workflow_executions (state_machine_id, state_machine_version, enqueued_at);"]))
 
 (defn- ensure-scheduler-table [ds]
   (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_scheduler_tasks (
@@ -233,7 +233,7 @@ INNER JOIN (
 ) as e2
 ON e.id = e2.id AND e.version = e2.version
 WHERE e.state_machine_id = ? AND e.state_machine_version = ?
-ORDER BY e.started_at DESC LIMIT ? OFFSET ?;"
+ORDER BY e.enqueued_at DESC LIMIT ? OFFSET ?;"
                         state-machine-id version
                         state-machine-id version
                         limit (or offset 0)]
@@ -245,7 +245,7 @@ INNER JOIN (
 ) as e2
 ON e.id = e2.id AND e.version = e2.version
 WHERE e.state_machine_id = ? AND e.state_machine_version = ?
-ORDER BY e.started_at DESC;"
+ORDER BY e.enqueued_at DESC;"
                         state-machine-id version
                         state-machine-id version]))))))
   (fetch-execution [_ execution-id version]

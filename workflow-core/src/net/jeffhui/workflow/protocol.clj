@@ -57,7 +57,7 @@
   ;;  - execution-id+version should always be unique, immutable, & accumulative
   ;;  - execution-id is always a UUID
   (executions-for-statem [_ state-machine-id options]
-    "Returns a sequence of executions by a given state machine. Ordered by latest executions started-at.
+    "Returns a sequence of executions by a given state machine. Ordered by latest executions enqueued-at.
 
     Parameters:
       options - {:limit int, :offset int, :version #{:latest, int, :all}}
