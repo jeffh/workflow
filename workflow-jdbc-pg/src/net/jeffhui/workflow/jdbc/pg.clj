@@ -181,7 +181,7 @@
          (into []
                (db->statem-txfm)
                (jdbc/plan conn ["SELECT * FROM workflow_statemachines WHERE id = ? AND version = ?;" state-machine-id version]))))))
-  (save-statem [_ state-machine]
+  (save-statem [_ state-machine options]
     (.submit
      pool
      ^Callable
@@ -240,7 +240,7 @@ ORDER BY e.started_at DESC;"
       (into []
             (db->execution-txfm)
             (jdbc/plan conn ["SELECT * FROM workflow_executions WHERE id = ? ORDER BY version ASC;" execution-id]))))
-  (save-execution [_ execution]
+  (save-execution [_ execution options]
     (.submit pool ^Callable (fn [] (save-execution ds execution)))))
 
 (defn make-persistence [db-spec]

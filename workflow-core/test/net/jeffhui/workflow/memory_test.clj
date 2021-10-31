@@ -7,7 +7,10 @@
   (contracts/statem-persistence "Memory Statem Persistence" mem/make-statem-persistence))
 
 (deftest execution-persistence-contract
-  (contracts/execution-persistence "Memory Execution Persistence" (comp mem/make-execution-persistence mem/make-statem-persistence)))
+  (contracts/execution-persistence "Memory Execution Persistence" mem/make-execution-persistence))
+
+(deftest scheduler-persistence-contract
+  (contracts/scheduler-persistence "Memory Scheduler Persistence" mem/make-scheduler-persistence))
 
 (deftest scheduler-contract
   (contracts/scheduler "Memory Scheduler" mem/make-scheduler))
@@ -15,8 +18,7 @@
 (deftest e2e
   (contracts/effects "Memory Execution"
                      (fn []
-                       (let [statem (mem/make-statem-persistence)]
-                         {:statem    statem
-                          :execution (mem/make-execution-persistence statem)
-                          :scheduler (mem/make-scheduler)}))))
+                       {:statem    (mem/make-statem-persistence)
+                        :execution (mem/make-execution-persistence)
+                        :scheduler (mem/make-scheduler)})))
 

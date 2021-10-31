@@ -11,6 +11,9 @@
            java.util.concurrent.Executors
            java.util.concurrent.ExecutorService))
 
+(defmacro ^:private try? [& body]
+  `(try ~@body (catch Throwable t# nil)))
+
 (defn- execution-handler [producer persistence handler open-tasks ^ExecutorService pool msg]
   ;; limitations:
   ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
@@ -22,7 +25,7 @@
        ;; (println (format "ExecutionHandler(%s)" (pr-str task)))
        (condp = (:task/op task)
          :run (when-let [f (first @handler)]
-                (let [res     (f (:task/execution-id task) (:task/execution-options task))
+                (let [res     (f (:task/execution-id task) (:task/execution-input task))
                       enc-res (nippy/fast-freeze (assoc task
                                                         :task/op :complete
                                                         :task/response res))]
@@ -40,28 +43,31 @@
                   ;; (println (format "MessageHandler(%s, %s)" (pr-str task) (pr-str ch)))
                   (when-let [res (:task/response task)] (async/put! ch res))
                   (async/close! ch)
-                  (swap! open-tasks dissoc (:task/id task))))))
-
-(defmacro ^:private try? [& body]
-  `(try ~@body (catch Throwable t# nil)))
+                  (swap! open-tasks dissoc (:task/id task))
+                  (try? (protocol/delete-task (:task/id task)))))))
 
 (defrecord Scheduler [producer responses-worker handler-consumer-fn executions-topic responses-topic persistence handler open-tasks close-poller name-hint ^ExecutorService executor create-poll-task make-executor]
   protocol/Scheduler
   (sleep-to [this timestamp execution-id options]
-    (let [task-id (protocol/save-task persistence timestamp execution-id options)]
-      (swap! open-tasks assoc task-id (async/chan 1))
-      (nil? task-id)))
+    (let [{task-id :task/id error :error} (protocol/save-task persistence timestamp execution-id options)]
+      (boolean
+       (when (nil? error)
+         (swap! open-tasks assoc task-id (async/chan 1))
+         (nil? task-id)))))
   (enqueue-execution [_ execution-id options]
-    (let [reply   (when (::wf/reply? options) (async/chan 1))
-          options (dissoc options ::wf/reply?)
-          task-id (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
-      (when reply (swap! open-tasks assoc task-id reply))
-      (messaging/send! producer executions-topic (str execution-id)
-                       (nippy/fast-freeze (merge {:task/op                :run
-                                                  :task/id                task-id
-                                                  :task/execution-id      execution-id
-                                                  :task/execution-options options}
-                                                 (when reply {:task/reply-topic responses-topic}))))
+    (let [reply              (when (::wf/reply? options) (async/chan 1))
+          options            (dissoc options ::wf/reply?)
+          {task-id :task/id error :error} (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
+      (if (nil? error)
+        (do
+          (when reply (swap! open-tasks assoc task-id reply))
+          (messaging/send! producer executions-topic (str execution-id)
+                           (nippy/fast-freeze (merge {:task/op              :run
+                                                      :task/id              task-id
+                                                      :task/execution-id    execution-id
+                                                      :task/execution-input options}
+                                                     (when reply {:task/reply-topic responses-topic})))))
+        (async/close! reply))
       reply))
   (register-execution-handler [_ f]
     (if (and (nil? (second @handler)) f)
@@ -168,7 +174,7 @@
   (keep #(let [after (:task/start-after %)]
            (when (and after (.isAfter (.toInstant after)
                                       (.toInstant #inst "2021-09-27T11:36:01.734-00:00")))
-             (select-keys % [:task/id :task/execution-id :task/execution-options :task/response])))
+             (select-keys % [:task/id :task/execution-id :task/execution-input :task/response])))
         @(:state (:persistence (:scheduler fx))))
 
   (do

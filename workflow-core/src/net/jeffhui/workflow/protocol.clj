@@ -36,14 +36,20 @@
 
      output := ::nothing if there is no output value."))
 
+;; NOTE(jeff): not final and subject to change
 (defprotocol StateMachinePersistence
   ;; Notes for persistence implementations:
   ;;  - state-machine-id+version should always be unique, immutable, & accumulative
   ;;  - state-machine-id is an arbitrary string
   (fetch-statem [_ state-machine-id version]
     "Returns a specific version of a state machine. Fetch latest if version = :latest")
-  (save-statem [_ state-machine]
+  (save-statem [_ state-machine options]
     "Saves a specific version a state machine.
+
+   Parameters:
+    state-machine - the state machine to save
+    options - currently unused. Exists for future use.
+
 	 Returns a future of {:ok bool, :entity {saved-state-machine...}}"))
 
 (defprotocol ExecutionPersistence
@@ -53,21 +59,59 @@
   (executions-for-statem [_ state-machine-id options]
     "Returns a sequence of executions by a given state machine. Ordered by latest executions started-at.
 
-		options - {:limit int, :offset int, :version #{:latest, int, :all}}")
+    Parameters:
+      options - {:limit int, :offset int, :version #{:latest, int, :all}}
+        NOTE for implementations of this protocol: version is resolved by the [[Effects]] type to an integer.
+    ")
   (fetch-execution [_ execution-id version]
     "Returns a specific version of an execution. Fetch latest if version = :latest")
   (fetch-execution-history [_ execution-id]
     "Returns a sequence of the full history of an execution, ordered by execution history (creation is first)")
-  (save-execution [_ execution]
+  (save-execution [_ execution options]
     "Saves a new version of an execution.
+
+     Parameters:
+      execution - the execution to store
+      options - {:keys [can-fail?]}
+        can-fail? - if true, the runtime doesn't care that this must absolutely be persistented.
+                    Typically this is false if it is the first or last execution and true otherwise.
+
+                    Persistence can choose to optimize around this intent, the
+                    runtime may check if the persistence failed even if
+                    can-fail? is true.
+
      Returns a future of {:ok bool, :entity {saved-execution...}}"))
 
 ;; Optional protocol that some schedulers may use to outsource their ability to schedule task in the future
+;; NOTE(jeff): not final and subject to change
 (defprotocol SchedulerPersistence
-  (save-task [_ timestamp execution-id options] "returns task id or nil on failure")
-  (runnable-tasks [_ now] "returns a seq of tasks to run {:task/id, :task/response, :task/execution-id, :task/execution-options, :task/start-after}")
-  (complete-task [_ task-id reply] "marks a saved task as complete, giving a return value for an observer"))
+  (save-task [_ timestamp execution-id input]
+    "Returns {:task/id ..., :error ...} tuple.
 
+    timestamp = java.util.Date in the future to trigger an execution
+    input = EDN data that should be deferred when calling trigger later.
+    ")
+  (runnable-tasks [_ now]
+    "Returns a seq of tasks to run {:task/id, :task/response, :task/execution-id, :task/execution-input, :task/start-after}
+
+    NOTE: There isn't any expectation that this must be all, but only that some
+    batch of them are returned for the scheduler to process.
+
+    now = java.util.Date instance.")
+  (complete-task [_ task-id reply]
+    "Marks a saved task as complete, giving a return value for an observer.
+
+    reply = EDN of the response for the task")
+  (delete-task [_ task-id]
+    "Marks as a task's response (from [[complete-task]]) has been processed and the task can be disposed of.
+     Return value is irrelevant.
+
+     NOTE: This is a convinence method. There is no guarantee that schedulers
+     will call this method. It is safe to assume that 24 hours after the task is
+     complete is safe to dispose of.
+    "))
+
+;; NOTE(jeff): not final and subject to change
 (defprotocol Scheduler
   (sleep-to [_ timestamp execution-id options]
     "Schedules the given execution to be enqueued after a specific
@@ -123,12 +167,16 @@
            :state-machine-persistence (close state-machine-persistence)))
   StateMachinePersistence
   (fetch-statem [_ state-machine-id version] (fetch-statem state-machine-persistence state-machine-id version))
-  (save-statem [_ state-machine] (save-statem state-machine-persistence state-machine))
+  (save-statem [_ state-machine options] (save-statem state-machine-persistence state-machine options))
   ExecutionPersistence
-  (executions-for-statem [_ state-machine-id options] (executions-for-statem execution-persistence state-machine-id options))
+  (executions-for-statem [_ state-machine-id {:keys [version] :as options}]
+    (when-let [version (if (= :latest version)
+                         (:state-machine/version (fetch-statem state-machine-persistence state-machine-id version))
+                         version)]
+      (executions-for-statem execution-persistence state-machine-id (assoc options :version version))))
   (fetch-execution [_ execution-id version] (fetch-execution execution-persistence execution-id version))
   (fetch-execution-history [_ execution-id] (fetch-execution-history execution-persistence execution-id))
-  (save-execution [_ execution] (save-execution execution-persistence execution))
+  (save-execution [_ execution options] (save-execution execution-persistence execution options))
   Scheduler
   (sleep-to [_ timestamp execution-id options] (sleep-to scheduler timestamp execution-id options))
   (enqueue-execution [_ execution options] (enqueue-execution scheduler execution options))

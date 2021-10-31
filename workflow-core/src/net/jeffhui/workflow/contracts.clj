@@ -3,7 +3,10 @@
             [clojure.core.async :as async]
             [net.jeffhui.workflow.api :as api]
             [net.jeffhui.workflow.protocol :as protocol]
-            [net.jeffhui.workflow.interpreters :refer [->Sandboxed]]))
+            [net.jeffhui.workflow.interpreters :refer [->Sandboxed]])
+  (:import java.util.Date
+           java.util.UUID
+           java.time.Instant))
 
 (declare order-statem shipment-statem)
 (defn statem-persistence [doc-name creator]
@@ -77,10 +80,10 @@
     (testing "conforms to execution persistence"
       (let [persistence (api/open (creator))]
         (try
-          (deref (protocol/save-execution persistence irrelevant-execution-started) 10000 :timeout)
+          (deref (protocol/save-execution persistence irrelevant-execution-started {:can-fail? false}) 10000 :timeout)
           (testing "[happy path - 1 execution; 1 step]"
             (testing "save-execution returns a future that saves the execution"
-              (let [r (protocol/save-execution persistence execution-started)]
+              (let [r (protocol/save-execution persistence execution-started {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
                 (is (= execution-started (:entity (deref r 1000 :timeout))))))
@@ -99,7 +102,7 @@
                   "persistence should return a single execution when fetching by state machine")))
           (testing "[happy path - 1 execution; 2 steps]"
             (testing "save-execution returns a future that saves the execution"
-              (let [r (protocol/save-execution persistence execution-step)]
+              (let [r (protocol/save-execution persistence execution-step {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
                 (is (= execution-step (:entity (deref r 1000 :timeout))))))
@@ -119,7 +122,7 @@
 
           (testing "[happy path - 2 executions; 2 steps, 1 step]"
             (testing "save-execution returns a future that saves the execution"
-              (let [r (protocol/save-execution persistence execution2-started)]
+              (let [r (protocol/save-execution persistence execution2-started {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
                 (is (= execution2-started (:entity (deref r 1000 :timeout))))))
@@ -146,7 +149,7 @@
 
           (testing "[exceptional cases]"
             (testing "errors with duplicate execution versions"
-              (let [r (protocol/save-execution persistence execution-started)]
+              (let [r (protocol/save-execution persistence execution-started {:can-fail? false})]
                 (is (not= :timeout (deref r 1000 :timeout))
                     "save may succeed or fail"))
 
@@ -155,6 +158,62 @@
 
           (finally
             (api/close persistence)))))))
+
+(defn scheduler-persistence [doc-name creator]
+  (testing doc-name
+    (testing "conforms to scheduler persistence"
+      (let [p            (api/open (creator))
+            now          (Instant/now)
+            execution-id #uuid "E988E8D2-492A-4773-8BBE-A92F7CF66B26"
+            input        {:test true}
+            delay        10000
+            return-value (UUID/randomUUID)]
+        (try
+          (testing "[happy path]"
+            (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
+            (testing "adding a task"
+              (let [{task-id :task/id error :error} (protocol/save-task p
+                                                                        (Date/from (.plusMillis now delay))
+                                                                        execution-id
+                                                                        input)]
+                (is (nil? error) "expect no error")
+                (is task-id "expect a task id is returned")
+                (is (empty? (protocol/runnable-tasks p (Date/from now)))
+                    "no immediately runnable tasks")
+                (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now (dec delay)))))
+                    "no runnable tasks between firing date")
+                (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now delay))))
+                    "no runnable tasks on firing date")
+                (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
+                  (is (contains? (into #{} (map :task/id) pending) task-id)
+                      (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
+
+                (testing "completing a task"
+                  (protocol/complete-task p task-id {:return return-value})
+                  (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
+                    (is (contains? (into #{} (map :task/id) pending) task-id)
+                        "There should be no running tasks")))
+
+                (testing "deleting task doesn't throw"
+                  (protocol/delete-task p task-id)))))
+          (testing "[other cases]"
+            (testing "scheduling a task in the past"
+              (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
+              (let [{task-id :task/id error :error} (protocol/save-task p
+                                                                        (Date/from (.plusMillis now (- delay)))
+                                                                        execution-id
+                                                                        input)]
+                (is (nil? error) "expect no error")
+                (is task-id "expect a task id is returned")
+                (let [pending (protocol/runnable-tasks p (Date/from now))]
+                  (is (contains? (into #{} (map :task/id) pending) task-id)
+                      (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
+
+                (testing "deleting task doesn't throw"
+                  (protocol/delete-task p task-id)
+                  (is (empty? (protocol/runnable-tasks p (Date/from now))))))))
+          (finally
+            (api/close p)))))))
 
 (defn scheduler [doc-name creator]
   (testing doc-name
@@ -271,6 +330,7 @@
               ~form
               (finally
                 (api/close ~fx-sym)))))))
+
 (defn effects [doc-name fx-options]
   (testing doc-name
     (testing "is well integrated:"

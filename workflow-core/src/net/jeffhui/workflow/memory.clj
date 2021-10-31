@@ -21,33 +21,30 @@
                     (apply max 1 (keys (get s state-machine-id)))
                     version)]
       (get-in s [state-machine-id version])))
-  (save-statem [_ state-machine]
-               (let [{:state-machine/keys [id version]} state-machine]
-                 (future (if (and id version (integer? version))
-                           {:ok     true
-                            :entity (get-in (swap! state assoc-in-if
-                                                   [(:state-machine/id state-machine)
-                                                    (:state-machine/version state-machine)]
-                                                   nil?
-                                                   state-machine)
-                                            [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
-                           {:ok false})))))
+  (save-statem [_ state-machine options]
+    (let [{:state-machine/keys [id version]} state-machine]
+      (future (if (and id version (integer? version))
+                {:ok     true
+                 :entity (get-in (swap! state assoc-in-if
+                                        [(:state-machine/id state-machine)
+                                         (:state-machine/version state-machine)]
+                                        nil?
+                                        state-machine)
+                                 [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
+                {:ok false})))))
 
 (defn make-statem-persistence []
   (->StateMachinePersistence (atom {})))
 
-(defrecord ExecutionPersistence [state statem-persistence]
+(defrecord ExecutionPersistence [state]
   p/ExecutionPersistence
   (executions-for-statem [_ state-machine-id {:keys [version limit offset]}]
-    (let [s       @state
-          version (if (= :latest version)
-                    (:state-machine/version (p/fetch-statem statem-persistence state-machine-id version))
-                    version)]
+    (let [s @state]
       ;; TODO(jeff): we should filter by state-machine-id, but it's so much easier to dump all for debugging
       (cond->> (->>
                 (group-by :execution/id
                           (cond
-                            (= -1 version) nil
+                            (nil? version) nil
                             (= :all version) (mapcat vals (vals s))
                             (integer? version) (filter (comp #{version} :execution/state-machine-version)
                                                        (mapcat vals (vals s)))))
@@ -57,7 +54,7 @@
                 (sort-by (juxt :execution/state-machine-id :execution/state-machine-version :execution/id :execution/version))
                 reverse)
         offset (drop offset)
-        limit (take limit))))
+        limit  (take limit))))
   (fetch-execution [_ execution-id version]
     (let [s       @state
           version (if (= version :latest)
@@ -68,7 +65,7 @@
     (let [s     @state
           execs (vals (get-in s [execution-id]))]
       (sort-by :execution/version execs)))
-  (save-execution [_ execution]
+  (save-execution [_ execution options]
     (assert (:execution/id execution))
     (assert (:execution/version execution))
     (future {:ok     true
@@ -77,31 +74,24 @@
                                     execution)
                              [(:execution/id execution) (:execution/version execution)])})))
 
-(defn make-execution-persistence [statem-persistence]
-  (->ExecutionPersistence (atom {}) statem-persistence))
+(defn make-execution-persistence []
+  (->ExecutionPersistence (atom {})))
 
 (defn- save-task* [state timestamp execution-id options]
   (let [task-id (str "task_" (UUID/randomUUID))]
-    (swap! state assoc task-id {:task/id                task-id
-                                :task/execution-id      execution-id
-                                :task/execution-options options
-                                :task/start-after       timestamp})
-    task-id))
+    (swap! state assoc task-id {:task/id              task-id
+                                :task/execution-id    execution-id
+                                :task/execution-input options
+                                :task/start-after     timestamp})
+    {:task/id task-id}))
 
 (defn- runnable-tasks* [state now]
   (let [s @state]
-    (swap! state (fn [s] (into {}
-                               (remove (fn [[_ v]] (:task/complete? v)))
-                               #_
-                               (filter (fn [[_ v]] (if-let [after (:task/start-after v)]
-                                                     (.isAfter (.plusMillis (.toInstant ^Date now) -1000)
-                                                               (.toInstant ^Date after))
-                                                     true)))
-                               s)))
+    (swap! state (fn [s] (into {} (remove (fn [[_ v]] (:task/complete? v))) s)))
     (keep #(let [after (:task/start-after %)]
              (when (.isAfter (.toInstant ^Date now)
                              (.toInstant ^Date after))
-               (select-keys % [:task/id :task/execution-id :task/execution-options :task/response :task/complete?])))
+               (select-keys % [:task/id :task/execution-id :task/execution-input :task/response :task/complete?])))
           (vals s))))
 
 (defn- complete-task* [state task-id reply]
@@ -112,11 +102,16 @@
          reply)
   true)
 
+(defn- delete-task* [state task-id]
+  (swap! state dissoc task-id)
+  true)
+
 (defrecord SchedulerPersistence [state]
   p/SchedulerPersistence
   (save-task [_ timestamp execution-id options] (save-task* state timestamp execution-id options))
   (runnable-tasks [_ now] (runnable-tasks* state now))
-  (complete-task [_ task-id reply] (complete-task* state task-id reply)))
+  (complete-task [_ task-id reply] (complete-task* state task-id reply))
+  (delete-task [_ task-id] (delete-task* state task-id)))
 
 (defn make-scheduler-persistence []
   (->SchedulerPersistence (atom {})))

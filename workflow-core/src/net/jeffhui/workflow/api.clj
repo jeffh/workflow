@@ -41,11 +41,11 @@
     (if errs
       (future {:ok    false
                :error errs})
-      (protocol/save-statem persistence statem))))
+      (protocol/save-statem persistence statem nil))))
 
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
-(defn- save-execution [persistence execution]
-  (protocol/save-execution persistence (s/debug-assert-execution execution)))
+(defn- save-execution [persistence execution options]
+  (protocol/save-execution persistence (s/debug-assert-execution execution) options))
 
 (defn io-ops [] (keys (methods protocol/io)))
 
@@ -161,7 +161,7 @@
         (and (= "finished" s)
              (nil? (:execution/state s))))))
 
-(defn- acquire-execution [fx executor-name execution input]
+(defn- acquire-execution [fx executor-name execution input options]
   (let [now (now!)]
     (save-execution fx (merge execution {:execution/version         (inc (:execution/version execution))
                                          :execution/comment         (format "Resuming execution (%s) on %s"
@@ -175,7 +175,8 @@
                                          :execution/step-started-at now
                                          :execution/step-ended-at   nil
                                          :execution/finished-at     nil
-                                         :execution/input           input}))))
+                                         :execution/input           input})
+                    options)))
 
 (defn- record-exception [fx starting-execution e]
   (let [err (Throwable->map e)]
@@ -192,7 +193,8 @@
                                                  :execution/version       (inc (:execution/version execution))
                                                  :execution/error         err
                                                  :execution/step-ended-at now
-                                                 :execution/failed-at     now}))]
+                                                 :execution/failed-at     now})
+                               {:can-fail? false})]
             execution'
             (do
               (Thread/sleep (* 10 (inc attempt)))
@@ -233,14 +235,14 @@
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
                ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution)]
+               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
            (if stop?
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
                                {:context      next-execution
                                 :execution-id (:execution/id execution)})))
-             (recur (:entity @(acquire-execution fx executor-name next-execution nil))
+             (recur (:entity @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                     nil)))))
       (catch Exception e
         (record-exception fx @latest-execution e)))))
@@ -427,15 +429,16 @@
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
                ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution)]
+               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
            (if stop?
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
-                               {:context      next-execution
-                                :execution-id (:execution/id execution)})))
+                               {:context      (dissoc next-execution :execution/memory)
+                                :execution-id (:execution/id execution)
+                                :tx           @tx})))
              (recur (do (deref tx 1000 ::timeout)
-                        (:entity @(acquire-execution fx "linear" next-execution nil)))
+                        (:entity @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                     nil)))))
       (catch Exception e
         (record-exception fx latest-execution e)))))
@@ -464,14 +467,15 @@
          (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
                _                      (reset! latest-execution execution)
                ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution)]
+               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
            (if stop?
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
-                               {:context      next-execution
-                                :execution-id (:execution/id execution)})))
-             (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil)
+                               {:context      (dissoc next-execution :execution/memory)
+                                :execution-id (:execution/id execution)
+                                :tx           @tx})))
+             (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
                         next-execution)
                     nil)))))
       (catch Exception e
@@ -508,13 +512,14 @@
        (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
              _                      (reset! latest-execution execution)
              ;; TODO(jeff): save intermediate executions (under (map second transitions))
-             tx                     @(save-execution fx next-execution)]
+             tx                     @(save-execution fx next-execution {:can-fail? (not stop?)})]
          (if stop?
            (if (:ok tx)
              next-execution
              (throw (ex-info "Failed to save execution"
-                             {:context      next-execution
-                              :execution-id (:execution/id execution)})))
+                             {:context      (dissoc next-execution :execution/memory)
+                              :execution-id (:execution/id execution)
+                              :tx           tx})))
            (do
              (enqueue-execution fx (:execution/id execution) nil)
              next-execution))))
@@ -524,13 +529,13 @@
 (defn- sync-run
   ([fx state-machine execution] (sync-run fx state-machine execution nil))
   ([fx state-machine execution input]
-   (save-execution fx execution)
+   (save-execution fx execution {:can-fail? false})
    (let [final-execution (run-sync-execution fx "synchronous-execution" state-machine execution input)]
      [(= "finished" (:execution/status final-execution)) (:execution/id execution) final-execution])))
 (defn- async-run
   ([fx state-machine execution] (async-run fx state-machine execution nil))
   ([fx state-machine execution input]
-   (let [ok (:ok @(save-execution fx execution))]
+   (let [ok (:ok @(save-execution fx execution {:can-fail? false}))]
      (when ok (enqueue-execution fx (:execution/id execution) input))
      [(boolean ok) (when ok (:execution/id execution)) nil])))
 
@@ -552,7 +557,7 @@
                  (when-let [e (fetch-execution fx eid :latest)]
                    (when (:execution/state e)
                      ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
-                     (when-let [res (acquire-execution fx executor-name e input)]
+                     (when-let [res (acquire-execution fx executor-name e input {:can-fail? false})]
                        (if-let [e (:entity (deref res 10000 nil))]
                          [e input]
                          (do
