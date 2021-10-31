@@ -126,6 +126,15 @@
 
 (def Time pos-int?)
 
+(def CompleteRef [:or string? uuid?])
+(def EffectOps [:enum
+                :execution/start
+                :execution/step
+                :execution/return
+                :invoke/io
+                :sleep/seconds
+                :sleep/timestamp])
+
 (def Execution
   [:map
    [:execution/comment [:maybe string?]]
@@ -149,7 +158,20 @@
    [:execution/user-started-at [:maybe Time]]
    [:execution/user-ended-at [:maybe Time]]
    [:execution/error [:maybe any?]]
-   [:execution/return-to [:maybe any?]]])
+   [:execution/return-to [:maybe any?]]
+   [:execution/pending-effects [:maybe [:vector [:map
+                                                 [:op EffectOps]
+                                                 [:args {:optional true} any?]
+                                                 [:complete-ref {:optional true} CompleteRef]]]]]
+   [:execution/completed-effects [:maybe [:vector [:map
+                                                   [:net.jeffhui.workflow.api/resume
+                                                    [:map
+                                                     [:id CompleteRef]
+                                                     [:op EffectOps]
+                                                     [:return
+                                                      [:map ;; can be more keys depending on the effect's return value
+                                                       [:ok boolean?]
+                                                       [:error any?]]]]]]]]]])
 
 
 ;;; "Soft" interface boundary: incase we want to replace the validation library
