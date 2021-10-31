@@ -49,7 +49,7 @@
 (defrecord Scheduler [producer responses-worker handler-consumer-fn executions-topic responses-topic persistence handler open-tasks close-poller name-hint ^ExecutorService executor create-poll-task make-executor]
   protocol/Scheduler
   (sleep-to [this timestamp execution-id options]
-    (let [{task-id :task/id error :error} (protocol/save-task persistence timestamp execution-id options)]
+    (let [{task-id :task/id error :error} @(protocol/save-task persistence timestamp execution-id options)]
       (boolean
        (when (nil? error)
          (swap! open-tasks assoc task-id (async/chan 1))
@@ -57,7 +57,7 @@
   (enqueue-execution [_ execution-id options]
     (let [reply              (when (::wf/reply? options) (async/chan 1))
           options            (dissoc options ::wf/reply?)
-          {task-id :task/id error :error} (protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
+          {task-id :task/id error :error} @(protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
       (if (nil? error)
         (do
           (when reply (swap! open-tasks assoc task-id reply))

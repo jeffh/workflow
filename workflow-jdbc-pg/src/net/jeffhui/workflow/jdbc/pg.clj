@@ -8,7 +8,9 @@
             [next.jdbc.connection :as connection])
   (:import com.zaxxer.hikari.HikariDataSource
            java.util.concurrent.Executors
-           java.util.concurrent.ExecutorService))
+           java.util.concurrent.ExecutorService
+           java.util.UUID
+           java.util.Date))
 
 (defn- record
   ([f ds parameterized-query]
@@ -36,7 +38,8 @@
   "Deletes all data. Please, I hope you know what you're doing."
   [ds]
   (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_executions"])
-  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_statemachines"]))
+  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_statemachines"])
+  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_scheduler_tasks"]))
 
 (defn- ensure-statem-table [ds]
   (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_statemachines (
@@ -73,6 +76,17 @@
   );
   CREATE INDEX IF NOT EXISTS workflow_executions_statem ON workflow_executions (state_machine_id, state_machine_version, started_at);"]))
 
+(defn- ensure-scheduler-table [ds]
+  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_scheduler_tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    execution_id UUID NOT NULL,
+    start_after BIGINT NOT NULL,
+    encoded BYTEA NOT NULL,
+    response BYTEA
+  );
+  CREATE INDEX IF NOT EXISTS workflow_scheduler_tasks_start_after ON workflow_scheduler_tasks (start_after);
+"]))
+
 (defn- db->statem-txfm []
   (let [field->key {:id             :state-machine/id
                     :version        :state-machine/version
@@ -87,6 +101,12 @@
      (map #(update % :state-machine/states nippy/fast-thaw)))))
 
 (defn- db->execution-txfm []
+  (map (fn [row]
+         (merge (nippy/fast-thaw (:encoded row))
+                (when-let [reply (:response row)]
+                  {:task/response (nippy/fast-thaw reply)})))))
+
+(defn- db->task-txfm []
   (map (comp nippy/fast-thaw :encoded)))
 
 (defn- resolve-statem-version [conn state-machine-id version]
@@ -103,7 +123,7 @@
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
 
-(defn- save-execution [ds execution]
+(defn- save-execution* [ds execution]
   (with-open [conn (jdbc/get-connection ds)]
     (try
       (record jdbc/execute! conn ["INSERT INTO workflow_executions (
@@ -241,10 +261,87 @@ ORDER BY e.started_at DESC;"
             (db->execution-txfm)
             (jdbc/plan conn ["SELECT * FROM workflow_executions WHERE id = ? ORDER BY version ASC;" execution-id]))))
   (save-execution [_ execution options]
-    (.submit pool ^Callable (fn [] (save-execution ds execution)))))
+    (.submit pool ^Callable (fn [] (save-execution* ds execution)))))
 
 (defn make-persistence [db-spec]
   (->Persistence db-spec nil nil))
+
+(defrecord SchedulerPersistence [db-spec ^javax.sql.DataSource ds ^ExecutorService pool]
+  p/Connection
+  (open* [this]
+    (when ds (.close ^java.io.Closeable ds))
+    (let [ds (connection/->pool HikariDataSource db-spec)]
+      (ensure-scheduler-table ds)
+      (assoc this :ds ds :pool (Executors/newSingleThreadExecutor (p/thread-factory (constantly "wf-jdbc-pg-scheduler-persistence"))))))
+  (close* [this]
+    (when ds (.close ^java.io.Closeable ds))
+    (when pool (.shutdown pool))
+    (assoc this :ds nil :pool nil))
+  p/SchedulerPersistence
+  (save-task [_ timestamp execution-id input]
+    (.submit
+     pool
+     ^Callable
+     (fn []
+       (with-open [conn (jdbc/get-connection db-spec)]
+         (let [tid (str "task_" (UUID/randomUUID))]
+           (try
+             (record jdbc/execute! conn ["INSERT INTO workflow_scheduler_tasks (id, execution_id, start_after, encoded) VALUES (?, ?, ?, ?);"
+                                         tid
+                                         execution-id
+                                         (.getTime ^Date timestamp)
+                                         (nippy/fast-freeze #:task{:input        input
+                                                                   :response     nil
+                                                                   :start-after  timestamp
+                                                                   :id           tid
+                                                                   :execution-id execution-id})])
+             {:task/id tid}
+             (catch clojure.lang.ExceptionInfo ei
+               (let [expected-unique "23505"]
+                 (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
+                   (if (= expected-unique sql-state)
+                     {:error :version-conflict}
+                     {:error (Throwable->map ei)})
+                   {:error (Throwable->map ei)})))))))))
+  (runnable-tasks [_ now]
+    (with-open [conn (jdbc/get-connection db-spec)]
+      (into []
+            (db->task-txfm)
+            (jdbc/plan
+             conn
+             ["SELECT encoded, response FROM workflow_scheduler_tasks WHERE start_after < ? ORDER BY start_after ASC"
+              (.getTime ^Date now)]))))
+  (complete-task [_ task-id reply]
+    (.submit
+     pool
+     ^Callable
+     (fn []
+       (with-open [conn (jdbc/get-connection db-spec)]
+         (try
+           (record jdbc/execute! conn ["UPDATE workflow_scheduler_tasks SET response = ? WHERE id = ? AND response IS NULL;"
+                                       (nippy/fast-freeze reply)
+                                       task-id])
+           {:task/id task-id}
+           (catch clojure.lang.ExceptionInfo ei
+             (let [expected-unique "23505"]
+               (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
+                 (if (= expected-unique sql-state)
+                   {:error :version-conflict}
+                   {:error (Throwable->map ei)})
+                 {:error (Throwable->map ei)}))))))))
+  (delete-task [_ task-id]
+    (.submit
+     pool
+     ^Callable
+     (fn []
+       (with-open [conn (jdbc/get-connection db-spec)]
+         (try
+           (record jdbc/execute! conn ["DELETE FROM workflow_scheduler_tasks WHERE id = ?" task-id])
+           (catch clojure.lang.ExceptionInfo ei
+             {:error (Throwable->map ei)})))))))
+
+(defn make-scheduler-persistence [db-spec]
+  (->SchedulerPersistence db-spec nil nil))
 
 (comment
 

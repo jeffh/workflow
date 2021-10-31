@@ -172,46 +172,58 @@
           (testing "[happy path]"
             (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
             (testing "adding a task"
-              (let [{task-id :task/id error :error} (protocol/save-task p
-                                                                        (Date/from (.plusMillis now delay))
-                                                                        execution-id
-                                                                        input)]
-                (is (nil? error) "expect no error")
-                (is task-id "expect a task id is returned")
-                (is (empty? (protocol/runnable-tasks p (Date/from now)))
-                    "no immediately runnable tasks")
-                (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now (dec delay)))))
-                    "no runnable tasks between firing date")
-                (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now delay))))
-                    "no runnable tasks on firing date")
-                (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
-                  (is (contains? (into #{} (map :task/id) pending) task-id)
-                      (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
+              (letlocals
+               (bind fut (protocol/save-task p (Date/from (.plusMillis now delay)) execution-id input))
+               (is (future? fut) "expected save-task to return a future")
+               (bind {task-id :task/id error :error :as res}
+                     (deref fut 10000 ::timeout))
+               (is (not= res ::timeout) "expected save-task to complete, but timed out")
+               (is (nil? error) "expect no error")
+               (is task-id "expect a task id is returned")
+               (is (empty? (protocol/runnable-tasks p (Date/from now)))
+                   "no immediately runnable tasks")
+               (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now (dec delay)))))
+                   "no runnable tasks between firing date")
+               (is (empty? (protocol/runnable-tasks p (Date/from (.plusMillis now delay))))
+                   "no runnable tasks on firing date")
+               (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
+                 (is (contains? (into #{} (map :task/id) pending) task-id)
+                     (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
 
-                (testing "completing a task"
-                  (protocol/complete-task p task-id {:return return-value})
-                  (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
-                    (is (contains? (into #{} (map :task/id) pending) task-id)
-                        "There should be no running tasks")))
+               (testing "completing a task"
+                 (letlocals
+                  (bind fut (protocol/complete-task p task-id {:return return-value}))
+                  (is (future? fut) "expected complete-task to return a future")
+                  (bind res (deref fut 10000 ::timeout))
+                  (is (not= res ::timeout) "expected complete-task to complete, but timed out"))
+                 (let [pending (protocol/runnable-tasks p (Date/from (.plusMillis now (inc delay))))]
+                   (is (contains? (into #{} (map :task/id) pending) task-id)
+                       "There should be no running tasks")))
 
-                (testing "deleting task doesn't throw"
-                  (protocol/delete-task p task-id)))))
+               (testing "deleting task doesn't throw"
+                 (protocol/delete-task p task-id)))))
           (testing "[other cases]"
             (testing "scheduling a task in the past"
               (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
-              (let [{task-id :task/id error :error} (protocol/save-task p
-                                                                        (Date/from (.plusMillis now (- delay)))
-                                                                        execution-id
-                                                                        input)]
-                (is (nil? error) "expect no error")
-                (is task-id "expect a task id is returned")
-                (let [pending (protocol/runnable-tasks p (Date/from now))]
-                  (is (contains? (into #{} (map :task/id) pending) task-id)
-                      (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
+              (letlocals
+               (bind fut (protocol/save-task p (Date/from (.plusMillis now (- delay))) execution-id input))
+               (is (future? fut) "expected save-task to return a future")
+               (bind {task-id :task/id error :error :as res}
+                     (deref fut 10000 ::timeout))
+               (is (not= res ::timeout) "expect save-task to complete, but timed out")
+               (is (nil? error) "expect no error")
+               (is task-id "expect a task id is returned")
+               (let [pending (protocol/runnable-tasks p (Date/from now))]
+                 (is (contains? (into #{} (map :task/id) pending) task-id)
+                     (format "Task should be in a runnable state: %s contains? %s" (pr-str pending) (pr-str task-id))))
 
-                (testing "deleting task doesn't throw"
-                  (protocol/delete-task p task-id)
-                  (is (empty? (protocol/runnable-tasks p (Date/from now))))))))
+               (testing "deleting task doesn't throw"
+                 (letlocals
+                  (bind fut (protocol/delete-task p task-id))
+                  (is (future? fut) "expected delete-task to return a future")
+                  (bind res (deref fut 10000 ::timeout))
+                  (is (not= res ::timeout) "expected delete-task to complete, but timed out"))
+                 (is (empty? (protocol/runnable-tasks p (Date/from now))))))))
           (finally
             (api/close p)))))))
 

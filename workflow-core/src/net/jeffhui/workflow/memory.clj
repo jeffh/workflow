@@ -108,10 +108,10 @@
 
 (defrecord SchedulerPersistence [state]
   p/SchedulerPersistence
-  (save-task [_ timestamp execution-id options] (save-task* state timestamp execution-id options))
+  (save-task [_ timestamp execution-id options] (future (save-task* state timestamp execution-id options)))
   (runnable-tasks [_ now] (runnable-tasks* state now))
-  (complete-task [_ task-id reply] (complete-task* state task-id reply))
-  (delete-task [_ task-id] (delete-task* state task-id)))
+  (complete-task [_ task-id reply] (future (complete-task* state task-id reply)))
+  (delete-task [_ task-id] (future (delete-task* state task-id))))
 
 (defn make-scheduler-persistence []
   (->SchedulerPersistence (atom {})))

@@ -86,7 +86,7 @@
 ;; NOTE(jeff): not final and subject to change
 (defprotocol SchedulerPersistence
   (save-task [_ timestamp execution-id input]
-    "Returns {:task/id ..., :error ...} tuple.
+    "Returns a future of {:task/id ..., :error ...} tuple.
 
     timestamp = java.util.Date in the future to trigger an execution
     input = EDN data that should be deferred when calling trigger later.
