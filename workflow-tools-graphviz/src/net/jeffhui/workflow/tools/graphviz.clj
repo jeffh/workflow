@@ -103,12 +103,23 @@
          (string/join "\n" edges)
          "\n"
          (string/join "\n" terminals)
+         "\n"
          (format "  %s [shape=box];\n" (:state-machine/start-at statem))
          "\n}")))
 
-(defn dot->bytes [dot format]
+(defn dot->stream [dot format]
   (let [{:keys [out err]} (sh/sh "dot" (str "-T" (name format)) :in dot :out-enc :bytes)]
     (io/input-stream out)))
+
+(defn stream->file [in-stream filename]
+  (with-open [f (io/output-stream (io/file filename))]
+    (io/copy in-stream f)))
+
+(defn statem->file [statem format filename]
+  (-> contracts/order-statem
+      statem->dot
+      (dot->bytes format)
+      (stream->file filename)))
 
 (comment
   (get-edges contracts/order-statem)
@@ -118,11 +129,6 @@
   (spit "test.dot" (statem->dot contracts/order-statem))
   (spit "test.dot" (statem->dot contracts/shipment-statem))
 
-
-  (with-open [f (io/output-stream (io/file "output.png"))]
-    (io/copy
-     (dot->bytes (statem->dot contracts/order-statem)
-                 :png)
-     f))
+  (statem->file contracts/order-statem :png "output.png")
 
   )
