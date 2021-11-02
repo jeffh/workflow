@@ -46,16 +46,19 @@
                          :action    ~action
                          :throwable (Throwable->map t#)}))))
 
-(defn- version-must-change [execution result]
+(defn- assert-version-must-change [execution input result]
   (let [v1 (:execution/version execution)
         v2 (:execution/version (:execution result))]
-    (if (or (:error result) (not= v1 v2))
-      true
-      (do
-        (println (format "original %s == next %s; original: %s"
-                         (pr-str v1) (pr-str v2)
-                         (pr-str execution)))
-        false))))
+    (when-not (or (:error result)
+                  (= execution (:execution result))
+                  (not= v1 v2))
+      (throw (AssertionError.
+              (format "original %s == next %s; original: %s ; input: %s ; result: %s"
+                      (pr-str v1) (pr-str v2)
+                      (pr-str execution)
+                      (pr-str input)
+                      (pr-str result)))))
+    result))
 
 (declare next-execution)
 (defn step-execution
@@ -110,31 +113,33 @@
   "
   ([cofx state-machine execution] (step-execution cofx state-machine execution nil))
   ([cofx state-machine execution input]
-   {:post [(version-must-change execution %)]}
-   (loop [prev-result        nil
-          result             (with-meta (->Result execution nil nil nil) {:previous execution})
-          input              input
-          result-transitions (transient [])]
-     (let [{:keys [execution effects transitions error]} result]
-       (if (and prev-result (or effects error
-                                (#{"wait" "finished"} (:execution/pause-state execution))
-                                (= (:execution/version (:execution prev-result))
-                                   (:execution/version execution))))
-         (if (:error/rejected? error)
-           (assoc prev-result :transitions (persistent! result-transitions))
-           (assoc result :transitions (persistent! (do (doseq [t transitions]
-                                                         (conj! result-transitions (with-meta t {:execution execution
-                                                                                                 :effects   effects
-                                                                                                 :error     error})))
-                                                       result-transitions))))
-         (recur result
-                (next-execution cofx state-machine execution input)
-                nil
-                (do (doseq [t transitions]
-                      (conj! result-transitions (with-meta t {:execution execution
-                                                              :effects   effects
-                                                              :error     error})))
-                    result-transitions)))))))
+   (assert-version-must-change
+    execution
+    input
+    (loop [prev-result        nil
+           result             (with-meta (->Result execution nil nil nil) {:previous execution})
+           input              input
+           result-transitions (transient [])]
+      (let [{:keys [execution effects transitions error]} result]
+        (if (and prev-result (or effects error
+                                 (#{"wait" "finished"} (:execution/pause-state execution))
+                                 (= (:execution/version (:execution prev-result))
+                                    (:execution/version execution))))
+          (if (:error/rejected? error)
+            (assoc prev-result :transitions (persistent! result-transitions))
+            (assoc result :transitions (persistent! (do (doseq [t transitions]
+                                                          (conj! result-transitions (with-meta t {:execution execution
+                                                                                                  :effects   effects
+                                                                                                  :error     error})))
+                                                        result-transitions))))
+          (recur result
+                 (next-execution cofx state-machine execution input)
+                 nil
+                 (do (doseq [t transitions]
+                       (conj! result-transitions (with-meta t {:execution execution
+                                                               :effects   effects
+                                                               :error     error})))
+                     result-transitions))))))))
 
 (defn- requires-trigger? [statem-states state]
   (boolean
@@ -573,5 +578,9 @@
                              :return {:execution/return-data {:delivered true}}}})
 
   [se5 se6 se7]
+
+
+  (next-execution cofx order-statem
+                  {:execution/version 6, :execution/finished-at nil, :execution/state "cart", :execution/pause-state "await-input", :execution/failed-at nil, :execution/state-machine-id "order", :execution/comment "Resuming execution (cart) on wf-kafka-scheduler", :execution/error nil, :execution/started-at 22568707267944, :execution/input {:net.jeffhui.workflow.api/action "fraud-approve"}, :execution/user-ended-at nil, :execution/return-to nil, :execution/memory {:order {:id "R3674"}}, :execution/mode "async-throughput", :execution/step-ended-at nil, :execution/completed-effects nil, :execution/pending-effects nil, :execution/enqueued-at 22568321789628, :execution/user-started-at nil, :execution/state-machine-version 1, :execution/step-started-at 22568810816506, :execution/id #uuid "9fefc55e-d10f-4ec9-8941-f4fdeabdc79c", :execution/pause-memory nil})
 
   )

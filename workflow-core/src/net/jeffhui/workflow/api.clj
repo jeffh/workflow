@@ -429,7 +429,7 @@
                                                                    :reason "failed to schedule sleep until timestamp"}})))
                                   (catch Throwable t
                                     {:error {:code      :error
-                                             :throwable (Throwable->map t)}}))]
+                                             :throwable (throwable->map t)}}))]
                         (cond-> (-> execution
                                     (assoc :execution/step-ended-at (now!)
                                            :execution/comment (format "Ran effects"))
@@ -632,7 +632,9 @@
              (loop [attempts 1]
                (when (< attempts 30)
                  (when-let [e (fetch-execution fx eid :latest)]
-                   (when (:execution/state e)
+                   (when-not (and (= "finished" (:execution/pause-state e))
+                                  (empty? (:execution/pending-effects e))
+                                  (empty? (:execution/completed-effects e)))
                      ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
                      (when-let [res (acquire-execution fx executor-name e input {:can-fail? false})]
                        (if-let [e (:entity (deref res 10000 nil))]

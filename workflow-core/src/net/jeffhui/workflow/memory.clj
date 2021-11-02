@@ -2,7 +2,8 @@
   (:require [net.jeffhui.workflow.api :as wf]
             [net.jeffhui.workflow.protocol :as p]
             [clojure.core.async :as async]
-            [net.jeffhui.workflow.contracts :as contracts])
+            [net.jeffhui.workflow.contracts :as contracts]
+            [net.jeffhui.workflow.api :as api])
   (:import java.time.Instant
            java.time.Duration
            java.util.Date
@@ -168,7 +169,7 @@
                                  :execution   (make-execution-persistence)
                                  :scheduler   (make-scheduler buf-size)
                                  :interpreter (->Sandboxed)})))
-      (def fx (make))
+      (def fx (api/open (make)))
       (wf/save-statem fx contracts/prepare-cart-statem)
       (wf/save-statem fx contracts/order-statem)
       (wf/save-statem fx contracts/shipment-statem)

@@ -636,7 +636,7 @@
                                                                     :result   (:n (:response ctx))}}
                                                          {:id       "retry"
                                                           :state    "outstanding"
-                                                          :context  {:response nil}
+                                                          :context  (update ctx :attempt inc)
                                                           :wait-for {:seconds 5}}]}
 
                                     "delivered" {:return {:delivered true}}}})

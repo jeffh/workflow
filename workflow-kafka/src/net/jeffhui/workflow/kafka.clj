@@ -4,7 +4,8 @@
             [net.jeffhui.workflow.memory :as mem]
             [net.jeffhui.workflow.api :as wf]
             [taoensso.nippy :as nippy]
-            [clojure.core.async :as async])
+            [clojure.core.async :as async]
+            [net.jeffhui.workflow.api :as api])
   (:import java.util.Date
            java.util.UUID
            java.time.Instant
@@ -15,24 +16,24 @@
   `(try ~@body (catch Throwable t# nil)))
 
 (defn- execution-handler [producer persistence handler open-tasks ^ExecutorService pool msg]
-  ;; limitations:
-  ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
-  (.submit
-   pool
-   ^Runnable
-   (fn executor []
-     (let [task (:value msg)]
-       ;; (println (format "ExecutionHandler(%s)" (pr-str task)))
-       (condp = (:task/op task)
-         :run (when-let [f (first @handler)]
-                (let [res     (f (:task/execution-id task) (:task/execution-input task))
-                      enc-res (nippy/fast-freeze (assoc task
-                                                        :task/op :complete
-                                                        :task/response res))]
-                  (protocol/complete-task persistence (:task/id task) res)
-                  ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
-                  (when-let [response-topic (:task/reply-topic task)]
-                    (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res)))))))))
+  (try
+    ;; limitations:
+    ;;   open-tasks should only be called on completion ops - we need a completion message on a topic
+    (let [task (:value msg)]
+      ;; (println (format "ExecutionHandler(%s)" (pr-str task)))
+      (condp = (:task/op task)
+        :run (when-let [f (first @handler)]
+               (let [res     (f (:task/execution-id task) (:task/execution-input task))
+                     enc-res (nippy/fast-freeze (assoc task
+                                                       :task/op :complete
+                                                       :task/response res))]
+                 (protocol/complete-task persistence (:task/id task) res)
+                 ;;  (messaging/send! producer execution-topic (str (:task/execution-id task)) enc-res)
+                 (when-let [response-topic (:task/reply-topic task)]
+
+                   (messaging/send! producer response-topic (str (:task/execution-id task)) enc-res))))))
+    (catch Throwable t
+      (.printStackTrace t))))
 
 (defn- responses-handler [producer persistence handler open-tasks msg]
   ;; limitations:
@@ -55,8 +56,8 @@
          (swap! open-tasks assoc task-id (async/chan 1))
          (nil? task-id)))))
   (enqueue-execution [_ execution-id options]
-    (let [reply              (when (::wf/reply? options) (async/chan 1))
-          options            (dissoc options ::wf/reply?)
+    (let [reply                           (when (::wf/reply? options) (async/chan 1))
+          options                         (dissoc options ::wf/reply?)
           {task-id :task/id error :error} @(protocol/save-task persistence (Date/from (.plusMillis (Instant/now) -10000)) execution-id options)]
       (if (nil? error)
         (do
@@ -180,105 +181,28 @@
   (do
     (do
       (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
+      (require '[net.jeffhui.workflow.contracts :as contracts] :reload)
       (defn make [consumer-id options]
-        (let [statem (mem/make-statem-persistence)]
-          (wf/effects {:statem      statem
-                       :execution   (mem/make-execution-persistence statem)
-                       :scheduler   (make-scheduler consumer-id (mem/make-scheduler-persistence) options)
-                       :interpreter (->Naive)})))
-      (def fx (make "test_repl" {:status-poll-interval-ms 100
-                                 :producer-options        {"bootstrap.servers" "localhost:9092"}
-                                 :consumer-options        {"bootstrap.servers" "localhost:9092"}}))
-      (wf/save-statem fx #:state-machine{:id             "order"
-                                         :version        1
-                                         :start-at       "create"
-                                         :execution-mode "async-throughput"
-                                         :context        '{:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
-                                         :states         '{"create"    {:always [{:name  "created"
-                                                                                  :state "cart"}]}
-                                                           "cart"      {:actions {"add"    {:name    "added"
-                                                                                            :state   "cart"
-                                                                                            :context (update-in state [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
-                                                                                  "remove" {:name    "removed"
-                                                                                            :state   "cart"
-                                                                                            :context (letfn [(sub [a b]
-                                                                                                               (let [a (vec a)
-                                                                                                                     n (count a)]
-                                                                                                                 (loop [out (transient [])
-                                                                                                                        i   0
-                                                                                                                        b   (frequencies b)]
-                                                                                                                   (if (= i n)
-                                                                                                                     (persistent! out)
-                                                                                                                     (let [ai (a i)]
-                                                                                                                       (if (pos? (b ai 0))
-                                                                                                                         (recur out (inc i) (update b ai dec))
-                                                                                                                         (recur (conj! out ai) (inc i) b)))))))]
-                                                                                                       (update-in state [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
-                                                                                  "place"  {:state "submitted"}}}
-                                                           "submitted" {:actions {"fraud-approve" {:state "fraud-approved"}
-                                                                                  "fraud-reject"  {:state "fraud-rejected"}}}
-
-                                                           "fraud-approved" {:always [{:state "released"}]}
-                                                           "fraud-rejected" {:actions {"cancel" {:state "canceled"}}}
-                                                           "released"       {:always [{:id     "ship"
-                                                                                       :name   "ship"
-                                                                                       :invoke {:state-machine ["shipment" 1]
-                                                                                                :input         {:order (:id (:order state))}
-                                                                                                :success       {:state   "ship-finished"
-                                                                                                                :context {:delivered (:delivered output)}}
-                                                                                                :error         {:state "canceled"}}}]}
-                                                           "ship-finished"  {:always [{:name  "fulfilled"
-                                                                                       :when  (:delivered state)
-                                                                                       :state "shipped"}
-                                                                                      {:name  "canceled"
-                                                                                       :state "canceled"}]}
-                                                           "shipped"        {:end true}
-                                                           "canceled"       {:end true}}})
-      @(wf/save-statem fx #:state-machine{:id             "shipment"
-                                          :version        1
-                                          :start-at       "created"
-                                          :execution-mode "async-throughput"
-                                          :context        '{:id        "S1"
-                                                            :order     (:order input)
-                                                            :delivered false}
-                                          :states         '{"created"     {:always [{:name  "fulfilled"
-                                                                                     :state "outstanding"}]}
-                                                            "outstanding" {:always  [{:id     "fetch"
-                                                                                      :name   "fetched"
-                                                                                      :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                                               :if    (<= 200 (:status output) 299)
-                                                                                               :then  {:state   "fetched"
-                                                                                                       :context {:response {:n (:n (:json (:body output)))}}}
-                                                                                               :else  {:state "failed"}}}]
-                                                                           :actions {"cancel" {:state "canceled"}}}
-                                                            "failed"      {:always [{:name     "retry"
-                                                                                     :state    "outstanding"
-                                                                                     :wait-for {:seconds 5}}]}
-
-                                                            "canceled" {:end    true
-                                                                        :return {:delivered false}}
-
-                                                            "fetched" {:always [{:name    "deliver"
-                                                                                 :state   "delivered"
-                                                                                 :when    (> 3 (:n (:response state)))
-                                                                                 :context {:response nil
-                                                                                           :result   (:n (:response state))}}
-                                                                                {:name     "retry"
-                                                                                 :state    "outstanding"
-                                                                                 :context  {:response nil}
-                                                                                 :wait-for {:seconds 5}}]}
-
-                                                            "delivered" {:end    true
-                                                                         :return {:delivered true}}}})
+        (wf/effects {:statem      (mem/make-statem-persistence)
+                     :execution   (mem/make-execution-persistence)
+                     :scheduler   (make-scheduler consumer-id (mem/make-scheduler-persistence) options)
+                     :interpreter (->Naive)}))
+      (def fx (api/open (make "test_repl" {:status-poll-interval-ms 100
+                                           :producer-options        {"bootstrap.servers" "localhost:9092"}
+                                           :consumer-options        {"bootstrap.servers" "localhost:9092"}})))
+      (wf/save-statem fx contracts/prepare-cart-statem)
+      (wf/save-statem fx contracts/order-statem)
+      (wf/save-statem fx contracts/shipment-statem)
 
       (protocol/register-execution-handler fx (wf/create-execution-handler fx))
       (def out (wf/start fx "order" nil)))
 
     (do
-      (wf/trigger fx (second out) {::wf/action "add"
-                                   ::wf/reply? true
-                                   :sku        "bns12"
-                                   :qty        1})
+      (def ch (wf/trigger fx (second out) {::wf/action "add"
+                                           ::wf/reply? true
+                                           :sku        "bns12"
+                                           :qty        1}))
+
       #_(Thread/sleep 100)
       (wf/trigger fx (second out) {::wf/action "place"})
       #_(Thread/sleep 100)
@@ -286,8 +210,16 @@
                                             ::wf/reply? true}))
       (async/take! res prn)))
 
+  (some wf/execution-error-truncated
+        (wf/fetch-execution-history fx (second out)))
 
-  (messaging/close! (:scheduler fx))
+  (wf/fetch-execution-history fx #uuid "721eb2a9-f537-4a69-bb05-ce09a27fa6d5")
+
+  (async/<!! ch)
+
+
+  (wf/close fx)
+
 
   (messaging/metrics (:producer (:scheduler fx)))
 
