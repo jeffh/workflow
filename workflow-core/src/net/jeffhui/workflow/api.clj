@@ -36,6 +36,37 @@
 (defn executions-for-statem [persistence state-machine-id options]
   (map s/debug-assert-execution (protocol/executions-for-statem persistence state-machine-id options)))
 
+(defn execution-error
+  "Returns an error stored in the execution"
+  [execution]
+  (or (when-let [e (:execution/error execution)]
+        e)
+      (when-let [ce (:execution/completed-effects execution)]
+        (when-let [e (some (comp :error :return ::resume) ce)]
+          e))))
+
+(defn execution-error-truncated
+  "Returns a truncated version of the error stored in the execution"
+  [execution]
+  (let [trace-> (fn [t]
+                  {:message (format "%s: %s" (:type t) (:message t))
+                   :data    (:data t)
+                   :at      (:at t)})]
+    (or (when-let [e (:execution/error execution)]
+          {:execution/id      (:execution/id execution)
+           :execution/version (:execution/version execution)
+           :kind              :execution-exception
+           :message           (:cause e)
+           :recent-stack      (vec (take 6 (map trace-> (:via e))))})
+        (when-let [ce (:execution/completed-effects execution)]
+          (when-let [e (some (comp :error :return ::resume) ce)]
+            {:execution/id      (:execution/id execution)
+             :execution/version (:execution/version execution)
+             :kind              :effect-error
+             :message           (:cause (:throwable e))
+             :code              (:code e)
+             :recent-stack      (vec (take 6 (map trace-> (:via (:throwable e)))))})))))
+
 (defn save-statem [persistence statem]
   (let [errs (s/err-for-statem statem)]
     (if errs

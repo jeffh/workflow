@@ -391,7 +391,13 @@ ORDER BY e.enqueued_at DESC;"
     (def out (wf/start fx "bad-io" {})))
 
   (wf/fetch-execution fx (second out) :latest)
-  (wf/fetch-execution-history fx (second out))
+
+  (some (fn [e]
+          (some (comp :cause :throwable :error :return ::wf/resume) (:execution/completed-effects e)))
+        (wf/fetch-execution-history fx (second out)))
+
+  (some wf/execution-error-truncated
+        (wf/fetch-execution-history fx (second out)))
 
   out
 
