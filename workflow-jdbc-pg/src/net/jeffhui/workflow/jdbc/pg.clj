@@ -207,7 +207,7 @@
      ^Callable
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
-         (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+         (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?)"
                                      (:state-machine/id state-machine)
                                      (:state-machine/version state-machine)
                                      (:state-machine/start-at state-machine)
