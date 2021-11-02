@@ -169,9 +169,12 @@
                                                      [:id CompleteRef]
                                                      [:op EffectOps]
                                                      [:return
-                                                      [:map ;; can be more keys depending on the effect's return value
-                                                       [:ok boolean?]
-                                                       [:error any?]]]]]]]]]])
+                                                      [:or ;; can be more keys depending on the effect's return value
+                                                       [:map
+                                                        [:ok [:enum false]]
+                                                        [:error any?]]
+                                                       [:map
+                                                        [:ok [:enum true]]]]]]]]]]]])
 
 
 ;;; "Soft" interface boundary: incase we want to replace the validation library
