@@ -93,12 +93,13 @@
 (defn io
   "Processes external io events. Also takes in consideration the any execution overrides."
   [op & args]
-  (if-let [code (get (:execution/io *execution*) op)]
-    (let [res (eval-action code *fx* io (:execution/memory *execution*) nil)]
-      (if (fn? res)
-        (apply res args)
-        res))
-    (apply protocol/io op args)))
+  (-> (if-let [code (get (:execution/io *execution*) op)]
+        (let [res (eval-action code *fx* io (:execution/memory *execution*) nil)]
+          (if (fn? res)
+            (apply res args)
+            res))
+        (apply protocol/io op args))
+      (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))))
 
 (defn- no-io
   [op & args]
@@ -645,5 +646,4 @@
              (step fx state-machine execution input))))
        (catch Throwable t
          (.printStackTrace t))))))
-
 

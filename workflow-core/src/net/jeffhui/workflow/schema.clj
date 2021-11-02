@@ -225,3 +225,37 @@
 (defn debug-assert-statem
   ([s] (when debug (assert-statem s)))
   ([s md] (when debug (assert-statem s md))))
+
+
+(declare edn?)
+(defn assert-edn [v msg]
+  (when-not (edn? v)
+    (throw (AssertionError. msg)))
+  v)
+
+(defn- edn? [f]
+  (cond
+    (or (string? f)
+        (number? f)
+        (seq? f)
+        (keyword? f)
+        (nil? f)
+        (symbol? f)
+        (inst? f)
+        (uuid? f))
+    true
+
+    (tagged-literal? f)
+    (edn? (:form f))
+
+    (map? f)
+    (and (every? edn? (keys f))
+         (every? edn? (vals f)))
+
+    (or (seq? f)
+        (list? f)
+        (vector? f)
+        (set? f))
+    (every? edn? f)
+
+    :else false))

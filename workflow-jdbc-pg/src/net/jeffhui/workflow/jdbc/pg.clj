@@ -414,4 +414,8 @@ ORDER BY e.enqueued_at DESC;"
     #_(Thread/sleep 100)
     (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
                                           ::wf/reply? true}))
-    (async/take! res prn)))
+    (async/take! res prn))
+
+
+  (defmethod p/io "bad" [_] {:something (delay 1)})
+  (wf/io "bad"))
