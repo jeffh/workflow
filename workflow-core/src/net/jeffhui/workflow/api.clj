@@ -281,7 +281,6 @@
           now                                            (now!)
           next-execution                                 (-> (:execution result)
                                                              (assoc :execution/error error
-                                                                    :execution/debug transitions
                                                                     :execution/step-ended-at now
                                                                     :execution/comment "Processed step")
                                                              (update :execution/pending-effects (comp not-empty (fnil into [])) effects))
@@ -382,7 +381,6 @@
                                                              (assoc :execution/error error
                                                                     :execution/pending-effects effects
                                                                     :execution/step-ended-at now
-                                                                    :execution/debug transitions
                                                                     :execution/comment "Processed effect result")
                                                              (update :execution/completed-effects (comp not-empty subvec) 1))
           stop?                                          (should-stop? next-execution effects error)]
@@ -399,7 +397,6 @@
                                                                 :execution/error error
                                                                 :execution/pending-effects effects
                                                                 :execution/step-ended-at now
-                                                                :execution/debug transitions
                                                                 :execution/comment "Processed step")
           stop?                                          (should-stop? next-execution effects error)]
       [stop? (cond-> next-execution
