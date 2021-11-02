@@ -44,7 +44,7 @@
                   (when-let [res (:task/response task)] (async/put! ch res))
                   (async/close! ch)
                   (swap! open-tasks dissoc (:task/id task))
-                  (try? (protocol/delete-task (:task/id task)))))))
+                  (try? (protocol/delete-task persistence (:task/id task)))))))
 
 (defrecord Scheduler [producer responses-worker handler-consumer-fn executions-topic responses-topic persistence handler open-tasks close-poller name-hint ^ExecutorService executor create-poll-task make-executor]
   protocol/Scheduler
