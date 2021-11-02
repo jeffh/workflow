@@ -5,12 +5,22 @@
             [clojure.set :as set]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            [next.jdbc.connection :as connection])
+            [next.jdbc.connection :as connection]
+            [net.jeffhui.workflow.api :as api]
+            [clojure.string :as string]
+            [clojure.walk :as walk])
   (:import com.zaxxer.hikari.HikariDataSource
            java.util.concurrent.Executors
            java.util.concurrent.ExecutorService
            java.util.UUID
            java.util.Date))
+
+;; NOTE(jeff): defined to provider easier debugging for serialization issues
+(defn- freeze [v]
+  (nippy/fast-freeze v))
+
+(defn- thaw [v]
+  (nippy/fast-thaw v))
 
 (defn- record
   ([f ds parameterized-query]
@@ -97,17 +107,17 @@
     (comp
      (map #(set/rename-keys % field->key))
      (map #(select-keys % (vals field->key)))
-     (map #(update % :state-machine/context nippy/fast-thaw))
-     (map #(update % :state-machine/states nippy/fast-thaw)))))
+     (map #(update % :state-machine/context thaw))
+     (map #(update % :state-machine/states thaw)))))
 
 (defn- db->execution-txfm []
   (map (fn [row]
-         (merge (nippy/fast-thaw (:encoded row))
+         (merge (thaw (:encoded row))
                 (when-let [reply (:response row)]
-                  {:task/response (nippy/fast-thaw reply)})))))
+                  {:task/response (thaw reply)})))))
 
 (defn- db->task-txfm []
-  (map (comp nippy/fast-thaw :encoded)))
+  (map (comp thaw :encoded)))
 
 (defn- resolve-statem-version [conn state-machine-id version]
   (if (= :latest version)
@@ -123,7 +133,14 @@
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
 
+#_(def debug (atom #{}))
+
 (defn- save-execution* [ds execution]
+  #_(locking *out*
+    (println "Save " (:execution/id execution) (:execution/version execution) (:execution/comment execution)))
+  #_(when (@debug [(:execution/id execution) (:execution/version execution)])
+    (throw (ex-info "NO" {:execution execution})))
+  #_(swap! debug conj [(:execution/id execution) (:execution/version execution)])
   (with-open [conn (jdbc/get-connection ds)]
     (try
       (record jdbc/execute! conn ["INSERT INTO workflow_executions (
@@ -153,7 +170,7 @@
                                   (:execution/mode execution)
                                   (:execution/state execution)
                                   (:execution/pause-state execution)
-                                  (nippy/fast-freeze execution)
+                                  (freeze execution)
                                   (:execution/enqueued-at execution)
                                   (:execution/started-at execution)
                                   (:execution/finished-at execution)
@@ -162,7 +179,7 @@
                                   (:execution/step-ended-at execution)
                                   (:execution/user-started-at execution)
                                   (:execution/user-ended-at execution)
-                                  (nippy/fast-freeze (:execution/error execution))
+                                  (freeze (:execution/error execution))
                                   (:execution/comment execution)])
       {:ok     true
        :entity execution}
@@ -170,14 +187,18 @@
         (let [expected-unique "23505"]
           (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
             (if (= expected-unique sql-state)
-              {:ok false :error :version-conflict}
+              {:ok        false
+               :error     :version-conflict
+               :exception ei}
               (throw ei))
             (throw ei))))
       (catch org.postgresql.util.PSQLException pe
         (let [expected-unique "23505"]
           (if-let [msg (.getServerErrorMessage pe)]
             (if (= expected-unique (.getSQLState msg))
-              {:ok false :error :version-conflict}
+              {:ok        false
+               :error     :version-conflict
+               :exception pe}
               (throw pe))
             (throw pe)))))))
 
@@ -212,8 +233,8 @@
                                      (:state-machine/version state-machine)
                                      (:state-machine/start-at state-machine)
                                      (:state-machine/execution-mode state-machine)
-                                     (nippy/fast-freeze (:state-machine/context state-machine))
-                                     (nippy/fast-freeze (:state-machine/states state-machine))])
+                                     (freeze (:state-machine/context state-machine))
+                                     (freeze (:state-machine/states state-machine))])
          {:ok     true
           :entity state-machine}))))
   p/ExecutionPersistence
@@ -290,11 +311,11 @@ ORDER BY e.enqueued_at DESC;"
                                          tid
                                          execution-id
                                          (.getTime ^Date timestamp)
-                                         (nippy/fast-freeze #:task{:input        input
-                                                                   :response     nil
-                                                                   :start-after  timestamp
-                                                                   :id           tid
-                                                                   :execution-id execution-id})])
+                                         (freeze #:task{:input        input
+                                                        :response     nil
+                                                        :start-after  timestamp
+                                                        :id           tid
+                                                        :execution-id execution-id})])
              {:task/id tid}
              (catch clojure.lang.ExceptionInfo ei
                (let [expected-unique "23505"]
@@ -319,7 +340,7 @@ ORDER BY e.enqueued_at DESC;"
        (with-open [conn (jdbc/get-connection db-spec)]
          (try
            (record jdbc/execute! conn ["UPDATE workflow_scheduler_tasks SET response = ? WHERE id = ? AND response IS NULL;"
-                                       (nippy/fast-freeze reply)
+                                       (freeze reply)
                                        task-id])
            {:task/id task-id}
            (catch clojure.lang.ExceptionInfo ei
@@ -343,3 +364,48 @@ ORDER BY e.enqueued_at DESC;"
 (defn make-scheduler-persistence [db-spec]
   (->SchedulerPersistence db-spec nil nil))
 
+(comment
+  (do
+    (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
+    (require '[net.jeffhui.workflow.memory :as mem] :reload)
+    (require '[net.jeffhui.workflow.contracts :as contracts])
+    (defn make [db-spec]
+      (let [p (make-persistence db-spec)]
+        (wf/effects {:statem      p
+                     :execution   p
+                     :scheduler   (mem/make-scheduler)
+                     :interpreter (->Sandboxed)})))
+    (def fx (wf/open (make {:jdbcUrl "jdbc:postgresql://localhost:5432/workflow_dev?user=postgres&password=password"})))
+    (wf/save-statem fx contracts/prepare-cart-statem)
+    (wf/save-statem fx contracts/order-statem)
+    (wf/save-statem fx contracts/shipment-statem)
+    (wf/save-statem fx contracts/bad-io-statem)
+    (p/register-execution-handler fx (wf/create-execution-handler fx)))
+
+  (wf/close fx)
+
+  (do
+    (def out (wf/start fx "prepare-cart" {:skus #{"A1" "B2"}})))
+
+  (do
+    (def out (wf/start fx "bad-io" {})))
+
+  (wf/fetch-execution fx (second out) :latest)
+  (wf/fetch-execution-history fx (second out))
+
+  out
+
+  (do
+    (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
+                                                                  {:status 200
+                                                                   :body   (:json-body res)})}}))
+    (wf/trigger fx (second out) {::wf/action "add"
+                                 ::wf/reply? true
+                                 :sku        "bns12"
+                                 :qty        1})
+    #_(Thread/sleep 100)
+    (wf/trigger fx (second out) {::wf/action "place"})
+    #_(Thread/sleep 100)
+    (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
+                                          ::wf/reply? true}))
+    (async/take! res prn)))

@@ -5,9 +5,9 @@
             ;; for multimethod implementations
             net.jeffhui.workflow.io.http
             [clojure.core.async :as async]
-            [clojure.set :as set])
+            [clojure.set :as set]
+            [clojure.walk :as walk])
   (:import java.util.UUID
-           java.util.concurrent.CompletableFuture
            java.util.function.Supplier
            java.util.concurrent.TimeUnit
            java.util.concurrent.CompletableFuture))
@@ -107,28 +107,29 @@
   ([fx state-machine-id]       (start fx state-machine-id (UUID/randomUUID) nil))
   ([fx state-machine-id input] (start fx state-machine-id (UUID/randomUUID) input))
   ([fx state-machine-id execution-id input]
-   (if-let [state-machine (s/debug-assert-statem
-                           (if (vector? state-machine-id)
-                             (fetch-statem fx (first state-machine-id) (second state-machine-id))
-                             (fetch-statem fx state-machine-id :latest))
-                           {:wanted-statem state-machine-id})]
-     (let [now                   (now!)
-           execution             (empty-execution {:execution-id    execution-id
-                                                   :state-machine   state-machine
-                                                   :initial-context (eval-action (:state-machine/context state-machine)
-                                                                                 fx
-                                                                                 no-io
-                                                                                 nil
-                                                                                 input)
-                                                   :input           input
-                                                   :now             now})
-           input                 (:execution/input input)
-           {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
-       (cond
-         error        [false nil {:error error}]
-         (nil? begin) [false nil {:error "invalid executor"}]
-         :else        (begin fx state-machine execution input)))
-     [false nil {:error ::state-machine-not-found}])))
+   (if-let [state-machine (if (vector? state-machine-id)
+                            (fetch-statem fx (first state-machine-id) (second state-machine-id))
+                            (fetch-statem fx state-machine-id :latest))]
+     (do
+       (s/debug-assert-statem state-machine {:requested-state-machine-id state-machine-id})
+       (let [now                   (now!)
+             execution             (empty-execution {:execution-id    execution-id
+                                                     :state-machine   state-machine
+                                                     :initial-context (eval-action (:state-machine/context state-machine)
+                                                                                   fx
+                                                                                   no-io
+                                                                                   nil
+                                                                                   input)
+                                                     :input           input
+                                                     :now             now})
+             input                 (:execution/input input)
+             {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
+         (cond
+           error        [false nil {:error error}]
+           (nil? begin) [false nil {:error "invalid executor"}]
+           :else        (begin fx state-machine execution input))))
+     [false nil {:error               ::state-machine-not-found
+                 :requested-statem-id state-machine-id}])))
 
 (defn trigger
   "Triggers a state machine to follow a specific transition.
@@ -145,9 +146,12 @@
     (throw (ex-info "execution not found" {:execution/id execution-id}))))
 
 (defn- timed-run* [timeout-in-msec f]
-  (-> (CompletableFuture/supplyAsync (reify Supplier (get [_] (f))))
-      (.orTimeout timeout-in-msec TimeUnit/MILLISECONDS)
-      (.join)))
+  (try
+    (-> (CompletableFuture/supplyAsync (reify Supplier (get [_] (f))))
+        (.orTimeout timeout-in-msec TimeUnit/MILLISECONDS)
+        (.join))
+    (catch java.util.concurrent.CompletionException e
+      (throw (.getCause e)))))
 
 (defmacro ^:private timed-run [timeout-in-msec body]
   `(let [t# ~timeout-in-msec]
@@ -179,13 +183,18 @@
                     options)))
 
 (defn- record-exception [fx starting-execution e]
-  (let [err (Throwable->map e)]
+  (let [err          (Throwable->map e)
+        max-attempts 3]
     (println "error: " (pr-str starting-execution) "; " (pr-str err))
     (.printStackTrace e)
-    (loop [attempt   3
+    (loop [attempt   max-attempts
            execution starting-execution]
       (if (zero? attempt)
-        (throw (ex-info "Failed to save failure" {:execution starting-execution} e))
+        (throw (ex-info "Failed to save failure" {:execution/id      (:execution/id starting-execution)
+                                                  :execution/version (:execution/version starting-execution)
+                                                  :error             :out-of-retry-attempts
+                                                  :attempts          max-attempts}
+                        e))
         (let [now (now!)]
           (if-let [execution' (save-execution
                                fx
@@ -240,8 +249,9 @@
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
-                               {:context      next-execution
-                                :execution-id (:execution/id execution)})))
+                               {:execution/id      (:execution/id execution)
+                                :execution/version (:execution/version execution)
+                                :tx                @tx})))
              (recur (:entity @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                     nil)))))
       (catch Exception e
@@ -260,6 +270,37 @@
       (and (contains? #{"wait" "await-input" "finished"} (:execution/pause-state execution))
            (empty? effects)
            (empty? (:execution/completed-effects execution)))))
+
+(defn- throwable->map [t]
+  (let [m (Throwable->map t)
+
+        scrub-data (fn scrub-data [v]
+                     (walk/postwalk
+                      (fn [f]
+                        (if (or (string? f)
+                                (number? f)
+                                (map? f)
+                                (seq? f)
+                                (list? f)
+                                (set? f)
+                                (vector? f)
+                                (keyword? f)
+                                (nil? f)
+                                (record? f)
+                                (symbol? f)
+                                (inst? f)
+                                (uuid? f))
+                          f
+                          #:net.jeffhui.workflow.api.serialization-error{:type        (.getName (type f))
+                                                                         :stringified (pr-str f)}))
+                      v))
+        scrub-err  (fn scrub-err [e]
+                    (if (:data e)
+                      (update e :data scrub-data)
+                      e))]
+    (update m :via
+            (fn [errs]
+              (mapv scrub-err errs)))))
 
 (defn- step-execution! [cofx fx state-machine execution input]
   ;; Advances the execution, running side effects if needed
@@ -282,7 +323,7 @@
           next-execution                                 (-> (:execution result)
                                                              (assoc :execution/error error
                                                                     :execution/step-ended-at now
-                                                                    :execution/comment "Processed step")
+                                                                    :execution/comment "Processed (input) step")
                                                              (update :execution/pending-effects (comp not-empty (fnil into [])) effects))
           stop?                                          (should-stop? next-execution effects error)]
       [stop? (cond-> next-execution
@@ -291,83 +332,87 @@
     ;; we have effects to run
     ;; TODO(jeff): do we want to batch this, or is it better to do them one-at-a-time and go to persist?
     (:execution/pending-effects execution)
-    [false ;; now's not the time to stop
-     (with-effects fx state-machine execution
-       (reduce (fn [execution {:keys [op args complete-ref] :as ef}]
-                 (let [ret (try
-                             ;; TODO(jeff): ops should validate args
-                             ;; TODO(jeff): move this case into protocol namespace
-                             (condp = op
-                               :execution/start (let [{:keys [state-machine-id execution-id input async?]}
-                                                      args
+    (let [next-execution
+          (with-effects fx state-machine execution
+            (reduce (fn [execution {:keys [op args complete-ref] :as ef}]
+                      (let [ret (try
+                                  ;; TODO(jeff): ops should validate args
+                                  ;; TODO(jeff): move this case into protocol namespace
+                                  (condp = op
+                                    :execution/start (let [{:keys [state-machine-id execution-id input async?]}
+                                                           args
 
-                                                      [ok execution-id execution]
-                                                      (start fx state-machine-id execution-id input)]
-                                                  (when async?
-                                                    (merge (when execution {:execution execution})
-                                                           {:error        (if ok nil {:code   :error
-                                                                                      :reason "failed to start"})
-                                                            :execution/id execution-id})))
-                               :execution/step (let [{:keys [execution-id action input async?]}
-                                                     args
+                                                           [ok execution-id execution]
+                                                           (start fx state-machine-id execution-id input)]
+                                                       (when async?
+                                                         (merge (when execution {:execution execution})
+                                                                {:error        (if ok nil {:code   :error
+                                                                                           :reason "failed to start"})
+                                                                 :execution/id execution-id})))
+                                    :execution/step (let [{:keys [execution-id action input async?]}
+                                                          args
 
-                                                     result
-                                                     (trigger fx execution-id (merge input
-                                                                                     {::action input}
-                                                                                     (when async?
-                                                                                       {::reply? true})))]
-                                                 (when result
-                                                   (async/alt!!
-                                                     (async/timeout 10000) {:error {:code   :timed-out
-                                                                                    :reason "waiting for result to trigger execution has timed out"}}
-                                                     result ([x] x))))
-                               :execution/return (let [to           (:to args)
-                                                       return-value (:result args)]
-                                                   (try
-                                                     (doseq [[execution-id complete-id] to]
-                                                       (enqueue-execution fx execution-id {::resume {:id     complete-id
-                                                                                                     :return return-value}
-                                                                                           ::reply? false}))
-                                                     (catch Throwable t
-                                                       (locking *out*
-                                                         (.printStackTrace t)))))
-                               :invoke/io        (let [{:keys [input expr]} args]
-                                                   (try
-                                                     (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
-                                                       {:value result})
-                                                     (catch Throwable t
-                                                       {:error {:code      :error
-                                                                :input     input
-                                                                :expr      expr
-                                                                :throwable (Throwable->map t)}})))
-                               :sleep/seconds    (let [{:keys [seconds]} args
-                                                       ok                (protocol/sleep fx seconds (:execution/id execution)
-                                                                                         {::resume {:id     complete-ref
-                                                                                                    :return {:sleep seconds}}})]
-                                                   (when-not ok
-                                                     {:error {:code   :io
-                                                              :reason "failed to schedule sleep by seconds"}}))
-                               :sleep/timestamp  (let [{:keys [timestamp]} args
-                                                       ok                  (protocol/sleep-to fx timestamp (:execution/id execution)
+                                                          result
+                                                          (trigger fx execution-id (merge input
+                                                                                          {::action input}
+                                                                                          (when async?
+                                                                                            {::reply? true})))]
+                                                      (when result
+                                                        (async/alt!!
+                                                          (async/timeout 10000) {:error {:code   :timed-out
+                                                                                         :reason "waiting for result to trigger execution has timed out"}}
+                                                          result ([x] x))))
+                                    :execution/return (let [to           (:to args)
+                                                            return-value (:result args)]
+                                                        (try
+                                                          (doseq [[execution-id complete-id] to]
+                                                            (enqueue-execution fx execution-id {::resume {:id     complete-id
+                                                                                                          :return return-value}
+                                                                                                ::reply? false}))
+                                                          (catch Throwable t
+                                                            (locking *out*
+                                                              (.printStackTrace t)))))
+                                    :invoke/io        (let [{:keys [input expr]} args]
+                                                        (try
+                                                          (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
+                                                            {:value result})
+                                                          (catch Throwable t
+                                                            {:error {:code      :error
+                                                                     :input     input
+                                                                     :expr      expr
+                                                                     :throwable (throwable->map t)}})))
+                                    :sleep/seconds    (let [{:keys [seconds]} args
+                                                            ok                (protocol/sleep fx seconds (:execution/id execution)
                                                                                               {::resume {:id     complete-ref
-                                                                                                         :return {:timestamp timestamp}}})]
-                                                   (when-not ok
-                                                     {:error {:code   :io
-                                                              :reason "failed to schedule sleep until timestamp"}})))
-                             (catch Throwable t
-                               {:error {:code      :error
-                                        :throwable (Throwable->map t)}}))]
-                   (cond-> (-> execution
-                               (assoc :execution/step-ended-at (now!)
-                                      :execution/comment (format "Ran effects"))
-                               (update :execution/pending-effects next))
-                     (and ret complete-ref) (update :execution/completed-effects (fnil conj [])
-                                                    {::resume {:id     complete-ref
-                                                               :op     op
-                                                               :return (assoc ret :ok (let [err (:error ret)]
-                                                                                        (boolean (not err))))}}))))
-               execution
-               (:execution/pending-effects execution)))]
+                                                                                                         :return {:sleep seconds}}})]
+                                                        (when-not ok
+                                                          {:error {:code   :io
+                                                                   :reason "failed to schedule sleep by seconds"}}))
+                                    :sleep/timestamp  (let [{:keys [timestamp]} args
+                                                            ok                  (protocol/sleep-to fx timestamp (:execution/id execution)
+                                                                                                   {::resume {:id     complete-ref
+                                                                                                              :return {:timestamp timestamp}}})]
+                                                        (when-not ok
+                                                          {:error {:code   :io
+                                                                   :reason "failed to schedule sleep until timestamp"}})))
+                                  (catch Throwable t
+                                    {:error {:code      :error
+                                             :throwable (Throwable->map t)}}))]
+                        (cond-> (-> execution
+                                    (assoc :execution/step-ended-at (now!)
+                                           :execution/comment (format "Ran effects"))
+                                    (update :execution/pending-effects next)
+                                    (update :execution/version inc))
+                          (and ret complete-ref) (update :execution/completed-effects (fnil conj [])
+                                                         {::resume {:id     complete-ref
+                                                                    :op     op
+                                                                    :return (assoc ret :ok (let [err (:error ret)]
+                                                                                             (boolean (not err))))}}))))
+                    execution
+                    (:execution/pending-effects execution)))
+          stop? (should-stop? next-execution (:execution/pending-effects next-execution) (:execution/error execution))]
+      [stop? (cond-> next-execution
+               stop? (assoc :execution/finished-at (now!)))])
 
     ;; advance the state machine based on effects that have completed that the
     ;; execution wants to be notified about success/failure
@@ -431,9 +476,10 @@
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
-                               {:context      (dissoc next-execution :execution/memory)
-                                :execution-id (:execution/id execution)
-                                :tx           @tx})))
+                               {:execution/id      (:execution/id execution)
+                                :execution/version (:execution/version execution)
+                                :tx                (dissoc @tx :exception)}
+                               (:exception @tx))))
              (recur (do (deref tx 1000 ::timeout)
                         (:entity @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                     nil)))))
@@ -469,9 +515,10 @@
              (if (:ok @tx)
                next-execution
                (throw (ex-info "Failed to save execution"
-                               {:context      (dissoc next-execution :execution/memory)
-                                :execution-id (:execution/id execution)
-                                :tx           @tx})))
+                               {:execution/id      (:execution/id execution)
+                                :execution/version (:execution/version execution)
+                                :tx                (dissoc @tx :exception)}
+                               (:exception @tx))))
              (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
                         next-execution)
                     nil)))))
@@ -514,9 +561,10 @@
            (if (:ok tx)
              next-execution
              (throw (ex-info "Failed to save execution"
-                             {:context      (dissoc next-execution :execution/memory)
-                              :execution-id (:execution/id execution)
-                              :tx           tx})))
+                             {:execution/id      (:execution/id execution)
+                              :execution/version (:execution/version execution)
+                              :tx                (dissoc @tx :exception)}
+                             (:exception @tx))))
            (do
              (enqueue-execution fx (:execution/id execution) nil)
              next-execution))))

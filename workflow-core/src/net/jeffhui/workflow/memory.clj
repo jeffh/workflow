@@ -160,16 +160,14 @@
       (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
       (require '[net.jeffhui.workflow.contracts :as contracts])
       (defn make
-        ([] (let [statem (make-statem-persistence)]
-              (wf/effects {:statem      statem
-                           :execution   (make-execution-persistence statem)
-                           :scheduler   (make-scheduler)
-                           :interpreter (->Sandboxed)})))
-        ([buf-size] (let [statem (make-statem-persistence)]
-                      (wf/effects {:statem      statem
-                                   :execution   (make-execution-persistence statem)
-                                   :scheduler   (make-scheduler buf-size)
-                                   :interpreter (->Sandboxed)}))))
+        ([] (wf/effects {:statem      (make-statem-persistence)
+                         :execution   (make-execution-persistence)
+                         :scheduler   (make-scheduler)
+                         :interpreter (->Sandboxed)}))
+        ([buf-size] (wf/effects {:statem      (make-statem-persistence)
+                                 :execution   (make-execution-persistence)
+                                 :scheduler   (make-scheduler buf-size)
+                                 :interpreter (->Sandboxed)})))
       (def fx (make))
       (wf/save-statem fx contracts/prepare-cart-statem)
       (wf/save-statem fx contracts/order-statem)

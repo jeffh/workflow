@@ -154,17 +154,25 @@
 (defrecord Effects [state-machine-persistence execution-persistence scheduler interp]
   Connection
   (open* [this]
-    (assoc this
-           :state-machine-persistence (open state-machine-persistence)
-           :execution-persistence (open execution-persistence)
-           :scheduler (open scheduler)
-           :interp (open interp)))
+    (let [statem (open state-machine-persistence)
+          exec (if (identical? state-machine-persistence execution-persistence)
+                 statem
+                 (open execution-persistence))]
+      (assoc this
+             :state-machine-persistence statem
+             :execution-persistence exec
+             :scheduler (open scheduler)
+             :interp (open interp))))
   (close* [this]
-    (assoc this
-           :interp (close interp)
-           :scheduler (close scheduler)
-           :execution-persistence (close execution-persistence)
-           :state-machine-persistence (close state-machine-persistence)))
+    (let [exec (close execution-persistence)
+          statem (if (identical? execution-persistence state-machine-persistence)
+                   exec
+                   (close state-machine-persistence))]
+      (assoc this
+             :interp (close interp)
+             :scheduler (close scheduler)
+             :execution-persistence exec
+             :state-machine-persistence statem)))
   StateMachinePersistence
   (fetch-statem [_ state-machine-id version] (fetch-statem state-machine-persistence state-machine-id version))
   (save-statem [_ state-machine options] (save-statem state-machine-persistence state-machine options))

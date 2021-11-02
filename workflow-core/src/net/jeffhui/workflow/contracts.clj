@@ -642,3 +642,12 @@
                                     "delivered" {:return {:delivered true}}}})
 
 
+(def bad-io-statem
+  #:state-machine{:id             "bad-io"
+                  :version        1
+                  :execution-mode "async-throughput"
+                  :start-at       "start"
+                  :states         '{"start" {:actions [{:id     "crash"
+                                                        :invoke {:call  (io "does not exist" 1 2 3)
+                                                                 :state "never"}}]}
+                                    "never" {:return "gonna give you up"}}})

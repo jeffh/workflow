@@ -46,6 +46,17 @@
                          :action    ~action
                          :throwable (Throwable->map t#)}))))
 
+(defn- version-must-change [execution result]
+  (let [v1 (:execution/version execution)
+        v2 (:execution/version (:execution result))]
+    (if (or (:error result) (not= v1 v2))
+      true
+      (do
+        (println (format "original %s == next %s; original: %s"
+                         (pr-str v1) (pr-str v2)
+                         (pr-str execution)))
+        false))))
+
 (declare next-execution)
 (defn step-execution
   "Makes one logical step of the execution. This means the execution runs until
@@ -99,6 +110,7 @@
   "
   ([cofx state-machine execution] (step-execution cofx state-machine execution nil))
   ([cofx state-machine execution input]
+   {:post [(version-must-change execution %)]}
    (loop [prev-result        nil
           result             (with-meta (->Result execution nil nil nil) {:previous execution})
           input              input
