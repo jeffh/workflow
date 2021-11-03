@@ -305,17 +305,17 @@ ORDER BY e.enqueued_at DESC;"
      ^Callable
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
-         (let [tid (str "task_" (UUID/randomUUID))]
+         (let [tid (str "stask_" (UUID/randomUUID))]
            (try
              (record jdbc/execute! conn ["INSERT INTO workflow_scheduler_tasks (id, execution_id, start_after, encoded) VALUES (?, ?, ?, ?);"
                                          tid
                                          execution-id
                                          (.getTime ^Date timestamp)
-                                         (freeze #:task{:input        input
-                                                        :response     nil
-                                                        :start-after  timestamp
-                                                        :id           tid
-                                                        :execution-id execution-id})])
+                                         (freeze #:task{:execution-input input
+                                                        :response        nil
+                                                        :start-after     timestamp
+                                                        :id              tid
+                                                        :execution-id    execution-id})])
              {:task/id tid}
              (catch clojure.lang.ExceptionInfo ei
                (let [expected-unique "23505"]

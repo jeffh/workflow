@@ -253,61 +253,71 @@
           (finally
             (api/close p)))))))
 
+(defn <!!-or-timeout [ch wait-msec default]
+  (async/alt!!
+    [ch] ([value ch] value)
+    [(async/timeout wait-msec)] default))
+
 (defn scheduler [doc-name creator]
-  (testing doc-name
-    (testing "conforms to a scheduler"
-      (let [sch     (api/open (creator))
-            queue   (async/chan 16)
-            replies (async/chan 16)]
-        (api/register-execution-handler sch (fn [execution-id execution-options]
-                                              (async/>!! queue [execution-id execution-options])
-                                              (async/<!! replies)))
-        (try
-          (testing "[happy path]"
-            (testing "enqueuing immediate execution, expecting no response"
-              (protocol/enqueue-execution sch #uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1})
-              (is (= [#uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1}] (async/<!! queue)))
-              (async/>!! replies {:test 1}))
-            (testing "enqueue immediate execution, expecting response"
-              (let [res (protocol/enqueue-execution sch #uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2 ::api/reply? true})]
-                (is (= [#uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2}]
-                       (update (async/<!! queue) 1 dissoc ::api/reply?)))
-                (async/>!! replies {:test 2})
-                (is (= {:test 2} (async/<!! res))
-                    "expect to receive reply")))
-            (testing "sleep execution later, expecting no response"
-              (let [sleep-duration 100
-                    res            (protocol/sleep sch sleep-duration #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3})
-                    start          (System/nanoTime)
-                    _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}]
-                                          (loop [x (async/<!! queue)]
-                                            (if (= #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" (first x))
-                                              x
-                                              (recur (async/<!! queue))))))
-                    end            (System/nanoTime)
-                    delta-ms       (double (/ (- end start) 1000000))]
-                (is (>= delta-ms sleep-duration)
-                    "execution is deferred by at least the given amount")
-                (async/>!! replies {:test 3}))))
-          (testing "[exceptional cases]"
-            (testing "sleeping in the past still runs"
-              (let [sleep-duration -1000
-                    res            (protocol/sleep sch sleep-duration #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4})
-                    start          (System/nanoTime)
-                    _              (is (= [#uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4}]
-                                          (loop [x (async/<!! queue)]
-                                            (if (= #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" (first x))
-                                              x
-                                              (recur (async/<!! queue))))))
-                    end            (System/nanoTime)
-                    delta-ms       (double (/ (- end start) 1000000))]
-                (is (pos? delta-ms)
-                    "execution occurs")
-                (async/>!! replies {:test 4}))))
-          (finally
-            (async/close! queue)
-            (async/close! replies)
-            (api/close sch)))))))
+  (let [timeout 10000]
+    (testing doc-name
+      (testing "conforms to a scheduler"
+        (let [sch     (api/open (creator))
+              queue   (async/chan 16)
+              replies {#uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:test 1}
+                       #uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:test 2}
+                       #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:test 3}
+                       #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:test 4}}]
+          (api/register-execution-handler sch (fn [execution-id execution-options]
+                                                (async/>!! queue [execution-id execution-options])
+                                                (replies execution-id)))
+          (try
+            (testing "[happy path]"
+              (testing "enqueuing immediate execution, expecting no response"
+                (protocol/enqueue-execution sch #uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1})
+                (is (= [#uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:argument 1}] (<!!-or-timeout queue timeout :timeout))))
+              (testing "enqueue immediate execution, expecting response"
+                (let [start  (System/nanoTime)
+                      res-ch (protocol/enqueue-execution sch #uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2 ::api/reply? true})]
+                  (is (= [#uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:argument 2}]
+                         (update (<!!-or-timeout queue timeout [:timeout nil]) 1 dissoc ::api/reply?)))
+                  (let [end         (System/nanoTime)
+                        duration-ms (double (/ (- end start) 1e9))]
+                    (is (= {:test 2} (<!!-or-timeout res-ch timeout :timeout))
+                        "expect to receive reply")
+
+                    (is (<= duration-ms 1)
+                        (format "enqueue to execution time is too slow: got %f ms" duration-ms)))))
+              (testing "sleep execution later, expecting no response"
+                (let [sleep-duration 100
+                      res            (protocol/sleep sch sleep-duration #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3})
+                      start          (System/nanoTime)
+                      _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}]
+                                            (loop [x (<!!-or-timeout queue timeout :timeout)]
+                                              (if (= #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" (first x))
+                                                x
+                                                (recur (<!!-or-timeout queue timeout :timeout))))))
+                      end            (System/nanoTime)
+                      delta-ms       (double (/ (- end start) 1000000))]
+                  (is (>= delta-ms sleep-duration)
+                      "execution is deferred by at least the given amount"))))
+            (testing "[exceptional cases]"
+              (testing "sleeping in the past still runs"
+                (let [sleep-duration -1000
+                      res            (protocol/sleep sch sleep-duration #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4})
+                      start          (System/nanoTime)
+                      _              (is (= [#uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:argument 4}]
+                                            (loop [x (<!!-or-timeout queue timeout :timeout)]
+                                              (if (= #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" (first x))
+                                                x
+                                                (recur (<!!-or-timeout queue timeout :timeout))))))
+                      end            (System/nanoTime)
+                      delta-ms       (double (/ (- end start) 1000000))]
+                  (is (pos? delta-ms)
+                      "execution occurs"))))
+            (finally
+              (async/close! queue)
+              (api/close sch))))))))
 
 (defn- print-executions [fx state-machine-id]
   (clojure.pprint/print-table

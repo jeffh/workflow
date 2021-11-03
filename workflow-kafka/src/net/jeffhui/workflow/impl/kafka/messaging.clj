@@ -380,14 +380,16 @@
           "exception-handler must be nil or a function")
   (assert (ifn? value-deserializer)
           "value-deserializer must be a function")
-  (let [msg-processor (comp process-message (fn [m] (update m :value value-deserializer)))]
+  (let [msg-processor (comp process-message (fn [m] (update m :value value-deserializer)))
+        thread-name   (.getName (Thread/currentThread))]
     (try
       (subscribe consumer topics)
+      #_(locking *out* (println "Started Consumer Loop" thread-name topics))
       (while (not @closed-atom)
         (let [records (poll consumer poll-duration)
               commits (processing-method msg-processor
-                                             failed-message-handler
-                                             records)]
+                                         failed-message-handler
+                                         records)]
           (commit-offsets consumer (not-empty commits))))
       (catch WakeupException e nil)
       (catch Exception e
@@ -395,6 +397,7 @@
           (exception-handler e)
           (.printStackTrace e)))
       (finally
+        #_(locking *out* (println "Consumer Exit" thread-name))
         (.close consumer)))))
 
 (defn backgrounded-consumer
@@ -427,7 +430,7 @@
           "value-deserializer must be a function")
   (let [closed (atom false)
         t      (doto (Thread. (fn [] (consumer-loop consumer closed options))
-                              (format "backgrounded-consumer[%s]-%s" (string/join "," topics)
+                              (format "kafka-consumer[%s]-%s" (string/join "," topics)
                                       (str thread-name)))
                  (.start))]
     (fn closer []

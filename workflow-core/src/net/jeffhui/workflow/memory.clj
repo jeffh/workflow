@@ -79,7 +79,7 @@
   (->ExecutionPersistence (atom {})))
 
 (defn- save-task* [state timestamp execution-id options]
-  (let [task-id (str "task_" (UUID/randomUUID))]
+  (let [task-id (str "stask_" (UUID/randomUUID))]
     (swap! state assoc task-id {:task/id              task-id
                                 :task/execution-id    execution-id
                                 :task/execution-input options
@@ -92,7 +92,7 @@
     (keep #(let [after (:task/start-after %)]
              (when (.isAfter (.toInstant ^Date now)
                              (.toInstant ^Date after))
-               (select-keys % [:task/id :task/execution-id :task/execution-input :task/response :task/complete?])))
+               (select-keys % [:task/id :task/execution-id :task/execution-input :task/response :task/complete? :task/start-after])))
           (vals s))))
 
 (defn- complete-task* [state task-id reply]
