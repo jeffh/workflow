@@ -89,8 +89,14 @@
   (save-task [_ task]
     "Returns a future of {:error ...}.
 
-    timestamp = java.util.Date in the future to trigger an execution
-    input = EDN data that should be deferred when calling trigger later.
+    task :- {:task/id              string
+             :task/start-after     #inst / Date
+             :task/execution-id    EDN
+             :task/execution-input EDN
+             ...}
+
+      start-after = java.util.Date in the future to trigger an execution
+      execution-input = EDN data that should be deferred when calling trigger later.
     ")
   (runnable-tasks [_ now]
     "Returns a seq of tasks to run {:task/id, :task/response, :task/execution-id, :task/execution-input, :task/start-after}
@@ -115,21 +121,25 @@
 ;; NOTE(jeff): not final and subject to change
 (defprotocol Scheduler
   (sleep-to [_ timestamp execution-id options]
-    "Schedules the given execution to be enqueued after a specific
-     datetime. Return value is truthy on successfully scheduling.
+    "Schedules the given execution to be enqueued after a specific datetime.
+     Returns a core.async/chan if a reply is expected.
 
-    timestamp :- #inst / Date
-    ")
+     Parameters:
+      options - {::workflow/reply? bool
+                  :as args}
+            Represents the input for resuming the execution. reply? indicates that a
+            channel should be returned of the state of the execution on completion
+            (can be successful or failure).")
   (enqueue-execution [_ execution-id options]
     "Enqueues an execution to resume execution. Returns a core.async/chan if a reply is expected.
 
      Parameters:
-	   execution - the execution-id to run.
-	   options - {::workflow/reply? bool
-	              :as args}
-          Represents the input for resuming the execution. reply? indicates that a
-          channel should be returned of the state of the execution on completion
-          (can be successful or failure).")
+      execution - the execution-id to run.
+      options - {::workflow/reply? bool
+                  :as args}
+            Represents the input for resuming the execution. reply? indicates that a
+            channel should be returned of the state of the execution on completion
+            (can be successful or failure).")
   (register-execution-handler [_ f]
     "Registers f to process executions. f = nil means to unregister.
 
