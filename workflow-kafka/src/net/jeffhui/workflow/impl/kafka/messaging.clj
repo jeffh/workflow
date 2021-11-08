@@ -380,11 +380,9 @@
           "exception-handler must be nil or a function")
   (assert (ifn? value-deserializer)
           "value-deserializer must be a function")
-  (let [msg-processor (comp process-message (fn [m] (update m :value value-deserializer)))
-        thread-name   (.getName (Thread/currentThread))]
+  (let [msg-processor (comp process-message (fn [m] (update m :value value-deserializer)))]
     (try
       (subscribe consumer topics)
-      #_(locking *out* (println "Started Consumer Loop" thread-name topics))
       (while (not @closed-atom)
         (let [records (poll consumer poll-duration)
               commits (processing-method msg-processor
@@ -397,7 +395,6 @@
           (exception-handler e)
           (.printStackTrace e)))
       (finally
-        #_(locking *out* (println "Consumer Exit" thread-name))
         (.close consumer)))))
 
 (defn backgrounded-consumer

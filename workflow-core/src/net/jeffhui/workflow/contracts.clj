@@ -199,9 +199,14 @@
             (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
             (testing "adding a task"
               (letlocals
-               (bind fut (protocol/save-task p (Date/from (.plusMillis now delay)) execution-id input))
+               (bind task #:task{:id              (str "task_" (UUID/randomUUID))
+                                 :start-after     (Date/from (.plusMillis now delay))
+                                 :execution-id    execution-id
+                                 :execution-input input})
+               (bind task-id (:task/id task))
+               (bind fut (protocol/save-task p task))
                (is (future? fut) "expected save-task to return a future")
-               (bind {task-id :task/id error :error :as res}
+               (bind {error :error :as res}
                      (deref fut 10000 ::timeout))
                (is (not= res ::timeout) "expected save-task to complete, but timed out")
                (is (nil? error) "expect no error")
@@ -232,9 +237,14 @@
             (testing "scheduling a task in the past"
               (is (empty? (protocol/runnable-tasks p (Date/from now))) "expected persistence to start with no tasks")
               (letlocals
-               (bind fut (protocol/save-task p (Date/from (.plusMillis now (- delay))) execution-id input))
+               (bind task #:task{:id              (str "task_" (UUID/randomUUID))
+                                 :start-after     (Date/from (.plusMillis now (- delay)))
+                                 :execution-id    execution-id
+                                 :execution-input input})
+               (bind task-id (:task/id task))
+               (bind fut (protocol/save-task p task))
                (is (future? fut) "expected save-task to return a future")
-               (bind {task-id :task/id error :error :as res}
+               (bind {error :error :as res}
                      (deref fut 10000 ::timeout))
                (is (not= res ::timeout) "expect save-task to complete, but timed out")
                (is (nil? error) "expect no error")
@@ -266,6 +276,7 @@
               queue   (async/chan 16)
               replies {#uuid "36179744-6E36-43CB-B378-28A0E380F7C8" {:test 1}
                        #uuid "C4F7B251-B4A9-4156-A810-40CA67CC3788" {:test 2}
+                       #uuid "55549945-963B-4F22-A438-5C26DFAA9C83" {:test 6}
                        #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:test 3}
                        #uuid "6314F257-CFCD-4A14-A123-EB188E479F8A" {:test 4}}]
           (api/register-execution-handler sch (fn [execution-id execution-options]
@@ -289,7 +300,7 @@
                     (is (<= duration-ms 1)
                         (format "enqueue to execution time is too slow: got %f ms" duration-ms)))))
               (testing "sleep execution later, expecting no response"
-                (let [sleep-duration 100
+                (let [sleep-duration (+ 100 (rand-int 900))
                       res            (protocol/sleep sch sleep-duration #uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3})
                       start          (System/nanoTime)
                       _              (is (= [#uuid "BB2F1B81-4EEE-443F-A874-D32EF41968F5" {:argument 3}]
@@ -300,7 +311,18 @@
                       end            (System/nanoTime)
                       delta-ms       (double (/ (- end start) 1000000))]
                   (is (>= delta-ms sleep-duration)
-                      "execution is deferred by at least the given amount"))))
+                      (format "execution is deferred by at least the given amount, expected %d" sleep-duration))))
+              (testing "sleep execution later, expecting a response"
+                (let [sleep-duration (+ 100 (rand-int 900))
+                      res            (protocol/sleep sch sleep-duration #uuid "55549945-963B-4F22-A438-5C26DFAA9C83" {:argument    6
+                                                                                                                      ::api/reply? true})
+                      start          (System/nanoTime)
+                      output         (<!!-or-timeout res (+ 1000 sleep-duration) ::timeout)
+                      end            (System/nanoTime)
+                      delta-ms       (double (/ (- end start) 1000000))]
+                  (is (= {:test 6} output))
+                  (is (>= delta-ms sleep-duration)
+                      (format "execution is deferred by at least the given amount, expected %d" sleep-duration)))))
             (testing "[exceptional cases]"
               (testing "sleeping in the past still runs"
                 (let [sleep-duration -1000
@@ -621,9 +643,7 @@
                                                               :state "outstanding"}]}
                                     "outstanding" {:actions [{:id     "fetch"
                                                               :when   (<= (:attempt ctx) 3)
-                                                              :invoke {#_#_:call (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                       :call     {:status 200 :body {:json {:n (rand-int 10)}}}
-
+                                                              :invoke {:call    {:status 200 :body {:json {:n (rand-int 10)}}}
                                                                        :state   "fetched"
                                                                        :context (assoc ctx :response {:status (when (:ok output) (:status (:value output)))
                                                                                                       :n      (:n (:json (:body (:value output))))})}}

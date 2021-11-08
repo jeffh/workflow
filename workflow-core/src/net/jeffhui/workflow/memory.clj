@@ -78,22 +78,18 @@
 (defn make-execution-persistence []
   (->ExecutionPersistence (atom {})))
 
-(defn- save-task* [state timestamp execution-id options]
-  (let [task-id (str "stask_" (UUID/randomUUID))]
-    (swap! state assoc task-id {:task/id              task-id
-                                :task/execution-id    execution-id
-                                :task/execution-input options
-                                :task/start-after     timestamp})
-    {:task/id task-id}))
+(defn- save-task* [state task]
+  (assert (:task/id task))
+  (swap! state assoc (:task/id task) task)
+  {:error nil})
 
 (defn- runnable-tasks* [state now]
   (let [s @state]
     (swap! state (fn [s] (into {} (remove (fn [[_ v]] (:task/complete? v))) s)))
-    (keep #(let [after (:task/start-after %)]
-             (when (.isAfter (.toInstant ^Date now)
-                             (.toInstant ^Date after))
-               (select-keys % [:task/id :task/execution-id :task/execution-input :task/response :task/complete? :task/start-after])))
-          (vals s))))
+    (filter #(let [after (:task/start-after %)]
+               (.isAfter (.toInstant ^Date now)
+                         (.toInstant ^Date after)))
+            (vals s))))
 
 (defn- complete-task* [state task-id reply]
   (swap! state (fn [s r] (if (contains? (s task-id) :task/response)
@@ -109,7 +105,7 @@
 
 (defrecord SchedulerPersistence [state]
   p/SchedulerPersistence
-  (save-task [_ timestamp execution-id options] (future (save-task* state timestamp execution-id options)))
+  (save-task [_ task] (future (save-task* state task)))
   (runnable-tasks [_ now] (runnable-tasks* state now))
   (complete-task [_ task-id reply] (future (complete-task* state task-id reply)))
   (delete-task [_ task-id] (future (delete-task* state task-id))))
@@ -120,9 +116,10 @@
 (defrecord Scheduler [work-ch handler]
   p/Scheduler
   (sleep-to [_ timestamp execution-id options]
-    (async/go (async/<! (async/timeout (inc (.toMillis (Duration/between (Instant/now) (.toInstant timestamp))))))
-              (async/>! work-ch [execution-id (dissoc options ::wf/reply?) nil]))
-    true)
+    (let [reply (when (::wf/reply? options) (async/chan 1))]
+      (async/go (async/<! (async/timeout (inc (.toMillis (Duration/between (Instant/now) (.toInstant timestamp))))))
+                (async/>! work-ch [execution-id (dissoc options ::wf/reply?) reply]))
+      reply))
   (enqueue-execution [_ execution-id options]
     (assert (uuid? execution-id))
     (let [reply (when (::wf/reply? options) (async/chan 1))]

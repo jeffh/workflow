@@ -299,23 +299,19 @@ ORDER BY e.enqueued_at DESC;"
     (when pool (.shutdown pool))
     (assoc this :ds nil :pool nil))
   p/SchedulerPersistence
-  (save-task [_ timestamp execution-id input]
+  (save-task [_ task]
     (.submit
      pool
      ^Callable
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
-         (let [tid (str "stask_" (UUID/randomUUID))]
+         (let [tid (:task/id task)]
            (try
              (record jdbc/execute! conn ["INSERT INTO workflow_scheduler_tasks (id, execution_id, start_after, encoded) VALUES (?, ?, ?, ?);"
                                          tid
-                                         execution-id
-                                         (.getTime ^Date timestamp)
-                                         (freeze #:task{:execution-input input
-                                                        :response        nil
-                                                        :start-after     timestamp
-                                                        :id              tid
-                                                        :execution-id    execution-id})])
+                                         (:task/execution-id task)
+                                         (.getTime ^Date (:task/start-after task))
+                                         (freeze task)])
              {:task/id tid}
              (catch clojure.lang.ExceptionInfo ei
                (let [expected-unique "23505"]

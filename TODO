@@ -2,7 +2,7 @@
   [~] Do transitions need IDs? -> yes
   [x] Is it worth for transitions to have names? -> No
   [x] Remove :execution/event-metadata
-  [ ] Remove :execution/comment
+  [~] Remove :execution/comment -> useful for debugging
 [ ] Organization
   [x] Namespacing to more unique reverse domain
   [x] Merge :end true and :return <Code>
@@ -13,11 +13,12 @@
   [ ] Streaming execution to another state machine
   [~] Retry failed executions -- NOTE(jeff): this can be done in a state machine or part of "catch" exceptions
   [ ] Upgrading Executions to new State Machine versions
+  [ ] Saving the exact state machine again should no-op
   [ ] IO
     [ ] Can be mocked/replaced without modifying the state machine or execution
     [x] IO can only be used in specific transition
     [x] All IO failures are reported back to the state machine
-    [ ] Idempotency behavior for IO
+    [ ] Idempotency behavior for IO?
   [ ] Validations
     [x] transition ids must be unique within a state
     [x] transition when must be unique within a state
@@ -52,7 +53,7 @@
   [ ] Visualization via State Machine
   [ ] Visualization of an execution
 	[ ] Stepping through execution
-  [ ] GraphViz
+  [x] GraphViz
   [ ] Xstate
   [ ] Sketch.System
 [ ] Testing

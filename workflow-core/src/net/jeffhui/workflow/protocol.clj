@@ -21,7 +21,8 @@
 
 (defn schedule-recurring-local-task! [initial-ms interval-ms f]
   (let [fut (.scheduleAtFixedRate ^ScheduledExecutorService @local-scheduler f (long initial-ms) (long interval-ms) TimeUnit/MILLISECONDS)]
-    (fn cancel [] (.cancel fut false))))
+    (fn cancel []
+      (.cancel fut false))))
 
 (defprotocol Connection
   (open* [_] "Sets up the instance")
@@ -85,8 +86,8 @@
 ;; Optional protocol that some schedulers may use to outsource their ability to schedule task in the future
 ;; NOTE(jeff): not final and subject to change
 (defprotocol SchedulerPersistence
-  (save-task [_ timestamp execution-id input]
-    "Returns a future of {:task/id ..., :error ...} tuple.
+  (save-task [_ task]
+    "Returns a future of {:error ...}.
 
     timestamp = java.util.Date in the future to trigger an execution
     input = EDN data that should be deferred when calling trigger later.

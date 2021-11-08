@@ -14,27 +14,90 @@
 
 (defn- now! [] (System/nanoTime))
 
-(def ^:dynamic *fx* nil)
-(def ^:dynamic *state-machine* nil)
-(def ^:dynamic *execution* nil)
-(def ^:dynamic *execution-id* nil)
+(def ^:dynamic *fx*
+  "The effect instance, available during io method implementations"
+  nil)
+(def ^:dynamic *state-machine*
+  "The current state-machine, available during io method implementations"
+  nil)
+(def ^:dynamic *execution*
+  "The current execution, available during io method implementations"
+  nil)
+(def ^:dynamic *execution-id*
+  "The current execution-id, available during io method implementations"
+  nil)
+
+(defn io-ops
+  "Returns all available io operations registered."
+  [] (keys (methods protocol/io)))
 
 (def ^:private sync-timeout 30000)
 (def ^:private async-step-timeout 30000)
 
-(def open protocol/open)
-(def close protocol/close)
-(def register-execution-handler protocol/register-execution-handler)
-(defn fetch-statem [persistence statem-id statem-version]
-  (when-let [s (protocol/fetch-statem persistence statem-id statem-version)]
+(defn open
+  "Opens stateful connections for effects.
+
+  Passthrough to [[protocol/open]]"
+  [obj]
+  (protocol/open obj))
+(defn close
+  "Closes stateful connections for effects.
+
+  Passthrough to [[protocol/close]]"
+  [obj]
+  (protocol/close obj))
+
+(declare create-execution-handler)
+(defn register-execution-handler
+  "Opts into processing executions.
+
+  Note: before calling this, all [[io]] methods should be defined.
+
+  Attaches a function responsible to run executions.
+
+  Passing a nil handler stops processing executions.
+  Omitting a handler uses [[create-execution-handler]] by default.
+  "
+  ([fx] (register-execution-handler fx (create-execution-handler fx)))
+  ([fx handler] (protocol/register-execution-handler fx handler)))
+
+(defn fetch-statem
+  "Returns a specific version of a state machine.
+
+  If version is `:latest`, then the persistence layer will return the state machine with the highest version.
+  "
+  [fx statem-id statem-version]
+  (when-let [s (protocol/fetch-statem fx statem-id statem-version)]
     (s/debug-assert-statem s)))
-(defn fetch-execution [persistence execution-id execution-version]
-  (when-let [e (protocol/fetch-execution persistence execution-id execution-version)]
+
+
+(defn fetch-execution
+  "Returns a specific version of an execution.
+
+  A version of an execution represents a specific moment in time of an execution.
+
+  If version is `:latest`, then the persistence layer will return the execution with the highest version.
+  "
+  [fx execution-id execution-version]
+  (when-let [e (protocol/fetch-execution fx execution-id execution-version)]
     (s/debug-assert-execution e)))
-(defn fetch-execution-history [persistence execution-id]
-  (map s/debug-assert-execution (protocol/fetch-execution-history persistence execution-id)))
-(defn executions-for-statem [persistence state-machine-id options]
-  (map s/debug-assert-execution (protocol/executions-for-statem persistence state-machine-id options)))
+
+(defn fetch-execution-history
+  "Returns a sequence of the full history of an execution, ordered by execution history (starting the execution is first)."
+  [fx execution-id]
+  (map s/debug-assert-execution (protocol/fetch-execution-history fx execution-id)))
+
+(defn executions-for-statem
+  "Returns a sequence of executions by a given state machine. Ordered by latest executions enqueued-at.
+
+    Parameters:
+      options - {:limit int, :offset int, :version #{:latest, int, :all}}
+        NOTE for implementations of this protocol: version is resolved by the [[Effects]] type to an integer.
+        If version is :latest, returns the latest version of each execution.
+        If version is :all, returns the all versions of execution, including historical executions.
+    "
+  [fx state-machine-id options]
+  (map s/debug-assert-execution (protocol/executions-for-statem fx state-machine-id options)))
 
 (defn execution-error
   "Returns an error stored in the execution"
@@ -67,7 +130,15 @@
              :code              (:code e)
              :recent-stack      (vec (take 6 (map trace-> (:via (:throwable e)))))})))))
 
-(defn save-statem [persistence statem]
+(defn save-statem
+  "Saves a specific version a state machine.
+
+   Parameters:
+    state-machine - the state machine to save
+    options - currently unused. Exists for future use.
+
+   Returns a (future {:ok bool, :entity {saved-state-machine...}})"
+  [persistence statem]
   (let [errs (s/err-for-statem statem)]
     (if errs
       (future {:ok    false
@@ -77,8 +148,6 @@
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
 (defn- save-execution [persistence execution options]
   (protocol/save-execution persistence (s/debug-assert-execution execution) options))
-
-(defn io-ops [] (keys (methods protocol/io)))
 
 (defn effects [{:keys [statem execution scheduler interpreter]}]
   {:pre [statem execution scheduler interpreter]}
@@ -105,7 +174,9 @@
   [op & args]
   (throw (ex-info "io is not allowed in this location" {:op op :args args})))
 
-(defn empty-execution [{:keys [execution-id state-machine initial-context input now return-to] :as options}]
+(defn empty-execution
+  "Returns a map that represents an empty execution"
+  [{:keys [execution-id state-machine initial-context input now return-to] :as options}]
   (let [now   (or now (now!))
         mode  (:state-machine/execution-mode state-machine)
         sync? (= mode "sync")]
@@ -217,8 +288,6 @@
 (defn- record-exception [fx starting-execution e]
   (let [err          (Throwable->map e)
         max-attempts 3]
-    (println "error: " (pr-str starting-execution) "; " (pr-str err))
-    (.printStackTrace e)
     (loop [attempt   max-attempts
            execution starting-execution]
       (if (zero? attempt)
@@ -402,8 +471,7 @@
                                                                                                           :return return-value}
                                                                                                 ::reply? false}))
                                                           (catch Throwable t
-                                                            (locking *out*
-                                                              (.printStackTrace t)))))
+                                                            (.printStackTrace t))))
                                     :invoke/io        (let [{:keys [input expr]} args]
                                                         (try
                                                           (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
@@ -487,9 +555,8 @@
   next one. This minimizes context switching costs but can cause a long backlog
   of work if each execution isn't fast to complete.
 
-  Context switches can be very expensive in crux adding 1 poll-wait-duration per
-  state transition (assuming we wait for response to ensure write
-  acknowledgements).
+  Context switches can be very expensive in polling-based infrastructure state
+  transition (assuming we wait for response to ensure write acknowledgements).
   "
   [fx state-machine starting-execution input]
   (let [timeout          (or (:state-machine/timeout-msec state-machine) async-step-timeout)
@@ -526,9 +593,8 @@
   next one. This minimizes context switching costs but can cause a long backlog
   of work if each execution isn't fast to complete.
 
-  Context switches can be very expensive in crux adding 1 poll-wait-duration per
-  state transition (assuming we wait for response to ensure write
-  acknowledgements).
+  Context switches can be very expensive in polling-based infrastructure state
+  transition (assuming we wait for response to ensure write acknowledgements).
   "
   [fx state-machine starting-execution input]
   (let [timeout          (or (:state-machine/timeout-msec state-machine) async-step-timeout)
@@ -623,6 +689,12 @@
 (defmethod executor "async-throughput-inconsistent" [_] {:begin async-run :step run-linear-execution-inconsistent})
 
 (defn create-execution-handler
+  "Create an execution handler that processes executions.
+
+  This includes:
+   - Understanding :state-machine/execution-mode
+   - Being idempotent for repeated executions are stored
+  "
   ([fx] (create-execution-handler fx nil))
   ([fx {:keys [executor-name]}]
    (fn handler [eid input]
