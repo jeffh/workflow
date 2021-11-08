@@ -67,12 +67,12 @@
 
   Types:
     Returns {:execution next-execution, :effects [{:op :kw, :args ..., :complete-ref resume-id}], :transitions [...], :error ...}
-      next-execution will have pause-state of #{\"ready\" \"wait\" \"await-input\" \"finished\"}
+      next-execution will have pause-state of #{\"ready\" \"wait-fx\" \"await-input\" \"finished\"}
         - \"ready\" indicates next-execution can be called again, it may or may
           not advance based on conditions of the actions.
         - \"await-input\" indicates the execution requires input to advance.
           This typically means providing an ::action key
-        - \"wait\" indicates this execution is waiting for completion of the return effect(s).
+        - \"wait-fx\" indicates this execution is waiting for completion of the return effect(s).
           After effects run, the ::resume key should be provided with a vector of completions.
           ::resume => {:id resume-id, :return fx-return-value}
         - \"finished\" indicates this execution has terminated. Futher attempts
@@ -122,7 +122,7 @@
            result-transitions (transient [])]
       (let [{:keys [execution effects transitions error]} result]
         (if (and prev-result (or effects error
-                                 (#{"wait" "finished"} (:execution/pause-state execution))
+                                 (#{"wait-fx" "finished"} (:execution/pause-state execution))
                                  (= (:execution/version (:execution prev-result))
                                     (:execution/version execution))))
           (if (:error/rejected? error)
@@ -158,12 +158,12 @@
 
   Types:
     Returns {:execution next-execution, :effects [{:op :kw, :args ..., :complete-ref resume-id}], :error ...}
-      next-execution will have pause-state of #{\"ready\" \"wait\" \"await-input\"}
+      next-execution will have pause-state of #{\"ready\" \"wait-fx\" \"await-input\"}
         - \"ready\" indicates next-execution can be called again, it may or may
           not advance based on conditions of the actions.
         - \"await-input\" indicates the execution requires input to advance.
           This typically means providing an ::action key
-        - \"wait\" indicates this execution is waiting for completion of the return effect(s).
+        - \"wait-fx\" indicates this execution is waiting for completion of the return effect(s).
           After effects run, the ::resume key should be provided with a vector of completions.
           ::resume => {:id resume-id, :return fx-return-value}
         - \"finished\" indicates this execution has terminated. Futher attempts
@@ -221,7 +221,7 @@
                                           [return-to])}}]
                        [{:id "finish" :finished true}]
                        nil)))
-         (if (= "wait" (:execution/pause-state execution))
+         (if (= "wait-fx" (:execution/pause-state execution))
            (cond
              (not resume)
              (->Result execution nil nil
@@ -258,7 +258,7 @@
                                  {:execution/state  next-state
                                   :execution/memory next-data}
                                  (if next-resumers
-                                   {:execution/pause-state  "wait"
+                                   {:execution/pause-state  "wait-fx"
                                     :execution/pause-memory (assoc (:execution/pause-memory execution) :resumers next-resumers)}
                                    {:execution/pause-state  (ready-or-await-pause-state states next-state)
                                     :execution/pause-memory nil}))
@@ -303,7 +303,7 @@
                                                          (when-let [eio (:execution/io execution)] {::io eio})
                                                          (when-not async? {::return-to [(:execution/id execution) rid]}))]
                              (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait"
+                                              {:execution/pause-state  "wait-fx"
                                                :execution/pause-memory {:action-id        aid
                                                                         :execution-id     eid
                                                                         :state-machine-id state-machine-id
@@ -331,7 +331,7 @@
                                               (eval-expr! (:context action) data input)
                                               data)]
                              (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait"
+                                              {:execution/pause-state  "wait-fx"
                                                :execution/pause-memory {:action-id      aid
                                                                         :execution-id   eid
                                                                         :original-input input
@@ -351,7 +351,7 @@
                            (let [effect (:call invoke)
                                  rid    (random-resume-id!)]
                              (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait"
+                                              {:execution/pause-state  "wait-fx"
                                                :execution/pause-memory {:action-id      (:id action)
                                                                         :original-input input
                                                                         :resumers       {rid {:then (select-keys invoke [:state :context])}}}})
@@ -377,7 +377,7 @@
                           (cond
                             seconds
                             (->Result (merge (next-ver execution)
-                                             {:execution/pause-state  "wait"
+                                             {:execution/pause-state  "wait-fx"
                                               :execution/pause-memory {:action-id      (:id action)
                                                                        :original-input input
                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}
@@ -392,7 +392,7 @@
 
                             timestamp
                             (->Result (merge (next-ver execution)
-                                             {:execution/pause-state  "wait"
+                                             {:execution/pause-state  "wait-fx"
                                               :execution/pause-memory {:action-id      (:id action)
                                                                        :original-input input
                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}

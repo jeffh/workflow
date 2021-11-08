@@ -368,7 +368,7 @@
 
 (defn- should-stop? [execution effects error]
   (or (boolean error)
-      (and (contains? #{"wait" "await-input" "finished"} (:execution/pause-state execution))
+      (and (contains? #{"wait-fx" "await-input" "finished"} (:execution/pause-state execution))
            (empty? effects)
            (empty? (:execution/completed-effects execution)))))
 

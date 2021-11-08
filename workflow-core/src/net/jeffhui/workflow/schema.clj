@@ -146,7 +146,7 @@
    [:execution/mode string?]
    [:execution/state [:maybe StateId]] ;; nil indicates terminated
    [:execution/memory any?]
-   [:execution/pause-state [:enum "ready" "await-input" "wait" "finished"]]
+   [:execution/pause-state [:enum "ready" "await-input" "wait-fx" "finished"]]
    [:execution/pause-memory any?]
    [:execution/input any?]
    [:execution/enqueued-at [:maybe Time]]

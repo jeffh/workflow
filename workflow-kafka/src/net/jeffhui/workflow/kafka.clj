@@ -260,6 +260,7 @@
                                                (:execution/version sm)])
                                  [:execution/state-machine-id
                                   :execution/state
+                                  :execution/pause-state
                                   :execution/event-name
                                   :execution/comment
                                   :execution/input
