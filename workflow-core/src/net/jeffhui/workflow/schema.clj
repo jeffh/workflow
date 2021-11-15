@@ -11,7 +11,7 @@
   [:schema {:registry {::std-transition [:and
                                          [:or
                                           [:map [:state StateId]]
-                                          [:map [:context StateId]]]
+                                          [:map [:context Code]]]
                                          [:map
                                           [:id StateId]
                                           [:when {:optional true} Code]
