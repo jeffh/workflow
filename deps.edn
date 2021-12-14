@@ -1,12 +1,14 @@
 {:jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
- :deps     {net.jeffhui/workflow-core           {:local/root "./workflow-core"}
-            net.jeffhui/workflow-jdbc-pg        {:local/root "./workflow-jdbc-pg"}
-            net.jeffhui/workflow-kafka          {:local/root "./workflow-kafka"}
-            net.jeffhui/workflow-tools-graphviz {:local/root "./workflow-tools-graphviz"}}
+ :deps     {net.jeffhui/workflow-core            {:local/root "./workflow-core"}
+            net.jeffhui/workflow-jdbc-pg         {:local/root "./workflow-jdbc-pg"}
+            net.jeffhui/workflow-kafka           {:local/root "./workflow-kafka"}
+            net.jeffhui/workflow-tools-graphviz  {:local/root "./workflow-tools-graphviz"}
+            net.jeffhui/workflow-tools-webviewer {:local/root "./workflow-tools-webviewer"}}
  :aliases  {:dev   {:extra-paths ["./workflow-core/test"
                                   "./workflow-jdbc-pg/test"
                                   "./workflow-kafka/test"
-                                  "./workflow-tools-graphviz/test"]}
+                                  "./workflow-tools-graphviz/test"
+                                  "./workflow-tools-webviewe/test"]}
             :build {:deps       {io.github.clojure/tools.build    {:git/tag "v0.6.2" :git/sha "226fb52"}
                                  io.github.seancorfield/build-clj {:git/tag "v0.5.2" :git/sha "8f75b81"}}
                     :paths      ["."]
@@ -14,11 +16,13 @@
             :test  {:extra-paths ["./workflow-core/test"
                                   "./workflow-jdbc-pg/test"
                                   "./workflow-kafka/test"
-                                  "./workflow-tools-graphviz/test"]
+                                  "./workflow-tools-graphviz/test"
+                                  "./workflow-tools-webviewer/test"]
                     :extra-deps  {io.github.cognitect-labs/test-runner {:git/tag "v0.5.0" :git/sha "b3fd0d2"}}
                     :main-opts   ["-m" "cognitect.test-runner"]
                     :exec-args   {:dirs ["workflow-core/test"
                                          "workflow-jdbc-pg/test"
                                          "workflow-kafka/test"
-                                         "workflow-tools-graphviz/test"]}
+                                         "workflow-tools-graphviz/test"
+                                         "workflow-tools-webviewer/test"]}
                     :exec-fn     cognitect.test-runner.api/test}}}

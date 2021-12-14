@@ -39,6 +39,15 @@
 
 ;; NOTE(jeff): not final and subject to change
 (defprotocol StateMachinePersistence
+  (list-statem [_ options]
+    "Returns a sequence of state machines stored.
+     Note: Large requests may negatively impact performance. Optimizations for large datasets aren't guaranteed
+
+     Options:
+      :fields => [...] ;; hint of keys used in state machines, nil assumes all keys
+      :version => #{:latest :all}
+      :limit => int
+      :offset => int")
   ;; Notes for persistence implementations:
   ;;  - state-machine-id+version should always be unique, immutable, & accumulative
   ;;  - state-machine-id is an arbitrary string
@@ -54,6 +63,15 @@
 	 Returns a future of {:ok bool, :entity {saved-state-machine...}}"))
 
 (defprotocol ExecutionPersistence
+  (list-executions [_ options]
+    "Returns a sequence of all executions stored.
+     Note: Large requests may negatively impact performance. Optimizations for large datasets aren't guaranteed
+
+     Options:
+      :fields => [...] ;; hint of keys used in executions, nil assumes all keys
+      :version => #{:latest :all}
+      :limit => int
+      :offset => int")
   ;; Notes for persistence implementations:
   ;;  - execution-id+version should always be unique, immutable, & accumulative
   ;;  - execution-id is always a UUID
@@ -185,9 +203,11 @@
              :execution-persistence exec
              :state-machine-persistence statem)))
   StateMachinePersistence
+  (list-statem [_ options] (list-statem :state-machine-persistence options))
   (fetch-statem [_ state-machine-id version] (fetch-statem state-machine-persistence state-machine-id version))
   (save-statem [_ state-machine options] (save-statem state-machine-persistence state-machine options))
   ExecutionPersistence
+  (list-executions [_ options] (list-executions execution-persistence options))
   (executions-for-statem [_ state-machine-id {:keys [version] :as options}]
     (when-let [version (if (= :latest version)
                          (:state-machine/version (fetch-statem state-machine-persistence state-machine-id version))

@@ -34,6 +34,7 @@
 (defn- ->request [method url {:keys [timeout]
                               :or {timeout 15000}
                               :as options}]
+  (prn method url)
   (let [b (doto (HttpRequest/newBuilder)
             (.uri (java.net.URI. (str url)))
             (.method (string/upper-case (name method))

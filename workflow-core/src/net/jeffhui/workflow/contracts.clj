@@ -38,66 +38,71 @@
 (defn statem-persistence [doc-name creator]
   (testing doc-name
     (testing "conforms to state machine persistence"
-      (let [persistence (api/open (creator))]
-        (try
-          (testing "[happy path]"
-            (testing "save-statem returns a future that saves the state machine"
-              (let [r (api/save-statem persistence order-statem)]
-                (is (future? r) "save-statem should return a future")
-                (let [result (deref r 1000 :timeout)]
-                  (is (:ok result) (format "save-statem should succeed: %s" (pr-str result))))
-                (is (= order-statem (:entity (deref r 1000 :timeout))))))
-
-            (testing "fetch-statem returns previously stored state machines"
-              (is (= order-statem (api/fetch-statem persistence
-                                                    (:state-machine/id order-statem)
-                                                    (:state-machine/version order-statem)))
-                  "persistence should return what was stored")
-              (is (= order-statem (api/fetch-statem persistence (:state-machine/id order-statem) :latest))
-                  "persistence should return latest state machine version"))
-
-            (testing "fetching :latest returns the latest state machine version"
-              (let [v2 (assoc order-statem :state-machine/version 2)]
-                (is (:ok (deref (api/save-statem persistence v2)
-                                1000 :timeout))
-                    "given version 2 of a state machine is saved")
-                (is (= v2 (api/fetch-statem persistence (:state-machine/id order-statem) :latest))
-                    "using version = :latest should return v2")))
-
-            (testing "checking that v1 of statem still exists after saving v2"
-              (is (= order-statem (api/fetch-statem persistence
-                                                    (:state-machine/id order-statem)
-                                                    (:state-machine/version order-statem)))
-                  "persistence should return what was stored")))
-
-          (testing "[exceptional cases]"
-            (testing "ignores duplicate state machine version"
-              (let [r (api/save-statem persistence (assoc shipment-statem
-                                                          :state-machine/id (:state-machine/id order-statem)
-                                                          :state-machine/version (:state-machine/version order-statem)))]
-                (is (not= :timeout (deref r 1000 :timeout))
-                    "save may succeed or fail"))
-
-              (is (= order-statem (api/fetch-statem persistence (:state-machine/id order-statem) (:state-machine/version order-statem)))
-                  "the original state machine remains unchanged")))
-
-          (testing "[input validation cases]"
-            (testing "persistence ignores saves without an id and version"
-              (letfn [(error-save [statem]
-                        (not (:ok (deref (api/save-statem persistence statem) 1000 :timeout))))]
-                (is (error-save (dissoc order-statem :state-machine/id))
-                    "errors without state machine id")
-                (is (error-save (dissoc order-statem :state-machine/version))
-                    "errors without state machine version")
-                (is (error-save (dissoc order-statem :state-machine/id :state-machine/version))
-                    "errors without state machine id and version")
-                (testing "errors when :state-machine/version is not an integer"
-                  (is (error-save (assoc order-statem :state-machine/version "1")))
-                  (is (error-save (assoc order-statem :state-machine/version 1.2)))
-                  (is (error-save (assoc order-statem :state-machine/version 1M)))))))
-
+      (testing "viewing case"
+        (let [persistence (api/open (creator))]
           (finally
-            (api/close persistence)))))))
+            (api/close persistence))))
+      (testing "basic storage"
+        (let [persistence (api/open (creator))]
+          (try
+            (testing "[happy path]"
+              (testing "save-statem returns a future that saves the state machine"
+                (let [r (api/save-statem persistence order-statem)]
+                  (is (future? r) "save-statem should return a future")
+                  (let [result (deref r 1000 :timeout)]
+                    (is (:ok result) (format "save-statem should succeed: %s" (pr-str result))))
+                  (is (= order-statem (:entity (deref r 1000 :timeout))))))
+
+              (testing "fetch-statem returns previously stored state machines"
+                (is (= order-statem (api/fetch-statem persistence
+                                                      (:state-machine/id order-statem)
+                                                      (:state-machine/version order-statem)))
+                    "persistence should return what was stored")
+                (is (= order-statem (api/fetch-statem persistence (:state-machine/id order-statem) :latest))
+                    "persistence should return latest state machine version"))
+
+              (testing "fetching :latest returns the latest state machine version"
+                (let [v2 (assoc order-statem :state-machine/version 2)]
+                  (is (:ok (deref (api/save-statem persistence v2)
+                                  1000 :timeout))
+                      "given version 2 of a state machine is saved")
+                  (is (= v2 (api/fetch-statem persistence (:state-machine/id order-statem) :latest))
+                      "using version = :latest should return v2")))
+
+              (testing "checking that v1 of statem still exists after saving v2"
+                (is (= order-statem (api/fetch-statem persistence
+                                                      (:state-machine/id order-statem)
+                                                      (:state-machine/version order-statem)))
+                    "persistence should return what was stored")))
+
+            (testing "[exceptional cases]"
+              (testing "ignores duplicate state machine version"
+                (let [r (api/save-statem persistence (assoc shipment-statem
+                                                            :state-machine/id (:state-machine/id order-statem)
+                                                            :state-machine/version (:state-machine/version order-statem)))]
+                  (is (not= :timeout (deref r 1000 :timeout))
+                      "save may succeed or fail"))
+
+                (is (= order-statem (api/fetch-statem persistence (:state-machine/id order-statem) (:state-machine/version order-statem)))
+                    "the original state machine remains unchanged")))
+
+            (testing "[input validation cases]"
+              (testing "persistence ignores saves without an id and version"
+                (letfn [(error-save [statem]
+                          (not (:ok (deref (api/save-statem persistence statem) 1000 :timeout))))]
+                  (is (error-save (dissoc order-statem :state-machine/id))
+                      "errors without state machine id")
+                  (is (error-save (dissoc order-statem :state-machine/version))
+                      "errors without state machine version")
+                  (is (error-save (dissoc order-statem :state-machine/id :state-machine/version))
+                      "errors without state machine id and version")
+                  (testing "errors when :state-machine/version is not an integer"
+                    (is (error-save (assoc order-statem :state-machine/version "1")))
+                    (is (error-save (assoc order-statem :state-machine/version 1.2)))
+                    (is (error-save (assoc order-statem :state-machine/version 1M)))))))
+
+            (finally
+              (api/close persistence))))))))
 
 
 (declare execution-started execution-step execution2-started irrelevant-execution-started)
@@ -539,8 +544,7 @@
                                                        :invoke {:state-machine ["prepare-cart" 1]
                                                                 :async?        true
                                                                 :input         {:skus (:items ctx)}
-                                                                :success       {}
-                                                                :error         {}}}]}}})
+                                                                :state         "idle"}}]}}})
 
 (def prepare-cart-statem
   #:state-machine{:id             "prepare-cart"
@@ -553,9 +557,14 @@
                   :states         '{"start"    {:actions [{:id     "create-cart"
                                                            :invoke {:state-machine ["order" 1]
                                                                     :async?        true
-                                                                    :success       {:state   "adding"
-                                                                                    :context (assoc ctx :order-eid (:execution/id output))}
-                                                                    :error         {:state "failed"}}}]}
+                                                                    :state         "started"
+                                                                    :context       (assoc ctx :invoke-response {:order-eid (:execution/id (:value output))
+                                                                                                                :ok        (:ok output)})}}]}
+                                    "started"  {:actions [{:id    "started-success"
+                                                           :when  (:ok (:invoke-response input))
+                                                           :state "adding"}
+                                                          {:id    "started-failed"
+                                                           :state "failed"}]}
                                     "adding"   {:actions [{:id     "adding"
                                                            :when   (seq (:left ctx))
                                                            :invoke {:trigger [(:order-eid ctx) "add"]
@@ -563,7 +572,7 @@
                                                                               :qty 1}
                                                                     :state   "added"
                                                                     :context (assoc ctx :last-output output)}}
-                                                          {:name  "complete"
+                                                          {:id    "complete"
                                                            :state "complete"}]}
                                     "added"    {:actions [{:id   "decide"
                                                            :if   (:ok (:last-output ctx))

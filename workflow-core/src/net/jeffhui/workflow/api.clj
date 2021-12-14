@@ -61,6 +61,14 @@
   ([fx] (register-execution-handler fx (create-execution-handler fx)))
   ([fx handler] (protocol/register-execution-handler fx handler)))
 
+(defn list-statem
+  "Experimental: Returns a sequence of state machines."
+  [fx options]
+  (when-let [s (protocol/list-statem fx options)]
+    (doseq [sm s]
+      (s/debug-assert-statem sm))
+    s))
+
 (defn fetch-statem
   "Returns a specific version of a state machine.
 
@@ -70,6 +78,13 @@
   (when-let [s (protocol/fetch-statem fx statem-id statem-version)]
     (s/debug-assert-statem s)))
 
+(defn list-executions
+  "Experimental: Returns a sequence of executions."
+  [fx options]
+  (when-let [s (protocol/list-executions fx options)]
+    (doseq [e s]
+      (s/debug-assert-execution e))
+    s))
 
 (defn fetch-execution
   "Returns a specific version of an execution.

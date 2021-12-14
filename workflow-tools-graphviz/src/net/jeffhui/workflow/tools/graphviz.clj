@@ -72,6 +72,9 @@
                                               (:timestamp wait-for)
                                               (format "Wait until %s" (str (:timestamp wait-for))))]))))]
 
+                    (:if action)
+                    [(format "  edge [color]")]
+
                     :else
                     (let [target (or (:state action) src)]
                       [(format "  edge [color=%s]"

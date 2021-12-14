@@ -16,6 +16,17 @@
 
 (defrecord StateMachinePersistence [state]
   p/StateMachinePersistence
+  (list-statem [_ {:keys [version limit offset]}]
+    (let [s @state
+          machines (mapcat vals s)
+          allowed-version (when (= :latest version)
+                            (into #{}
+                                  (mapcat (juxt first (comp  vals)))
+                                  s))]
+      (cond->> machines
+        (= :latest version) (filter (comp allowed-versions (juxt :state-machine/id :state-machine/version)))
+        offset (drop offset)
+        limit (take limit))))
   (fetch-statem [_ state-machine-id version]
     (let [s       @state
           version (if (= version :latest)
@@ -41,7 +52,6 @@
   p/ExecutionPersistence
   (executions-for-statem [_ state-machine-id {:keys [version limit offset]}]
     (let [s @state]
-      ;; TODO(jeff): we should filter by state-machine-id, but it's so much easier to dump all for debugging
       (cond->> (->>
                 (group-by :execution/id
                           (cond
