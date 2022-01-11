@@ -334,6 +334,12 @@
    :current-time!        now!
    :random-resume-id!    random-uuid
    :random-execution-id! random-uuid})
+(defn- save-transitions [fx stop? result]
+  (let [opt {:can-fail? (not stop?)}]
+    (if (seq (:transitions result))
+      (last (for [mt (map meta (:transitions result))]
+              (save-execution fx (:execution mt) opt)))
+      (save-execution fx (:execution result) opt))))
 
 (defn- run-sync-execution
   "Returns the final transaction. Also manages the database interactions while
@@ -357,10 +363,13 @@
        timeout
        (loop [execution starting-execution
               input     input]
-         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
-               _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
+         (let [result         (step-execution! cofx fx state-machine execution input)
+               stop?          (core/result-stopped? result)
+               next-execution (:execution result)
+               _              (reset! latest-execution execution)
+               tx             (save-transitions fx stop? result)
+               ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
+               ]
            (if stop?
              (if (:ok @tx)
                next-execution
@@ -382,10 +391,7 @@
        ~@body)))
 
 (defn- should-stop? [execution effects error]
-  (or (boolean error)
-      (and (contains? #{"wait-fx" "await-input" "finished"} (:execution/pause-state execution))
-           (empty? effects)
-           (empty? (:execution/completed-effects execution)))))
+  (core/result-stopped? (core/->Result execution effects nil error)))
 
 (defn- throwable->map [t]
   (let [m (Throwable->map t)
@@ -425,7 +431,7 @@
   ;;
   ;; Algorithm:
   ;;  1. Run any incoming input trigger
-  ;;  2. Execution any pending effects
+  ;;  2. Execute any pending effects
   ;;     TODO(jeff): we should process pending effects one at a time
   ;;  3. Process any completion effects
   ;;  4. Automate decision making
@@ -441,9 +447,10 @@
                                                                     :execution/step-ended-at now
                                                                     :execution/comment "Processed (input) step")
                                                              (update :execution/pending-effects (comp not-empty (fnil into [])) effects))
-          stop?                                          (should-stop? next-execution effects error)]
-      [stop? (cond-> next-execution
-               stop? (assoc :execution/finished-at now))])
+          new-result                                     (assoc result :execution next-execution)]
+      (cond-> new-result
+        (core/result-stopped? new-result)
+        (assoc-in [:execution :execution/finished-at] now)))
 
     ;; we have effects to run
     ;; TODO(jeff): do we want to batch this, or is it better to do them one-at-a-time and go to persist?
@@ -526,8 +533,11 @@
                     execution
                     (:execution/pending-effects execution)))
           stop? (should-stop? next-execution (:execution/pending-effects next-execution) (:execution/error execution))]
-      [stop? (cond-> next-execution
-               stop? (assoc :execution/finished-at (now!)))])
+      (core/->Result (cond-> next-execution
+                       stop? (assoc :execution/finished-at (now!)))
+                     (:execution/pending-effects next-execution)
+                     nil
+                     (:execution/error next-execution)))
 
     ;; advance the state machine based on effects that have completed that the
     ;; execution wants to be notified about success/failure
@@ -544,8 +554,11 @@
                                                                     :execution/comment "Processed effect result")
                                                              (update :execution/completed-effects (comp not-empty subvec) 1))
           stop?                                          (should-stop? next-execution effects error)]
-      [stop? (cond-> next-execution
-               stop? (assoc :execution/finished-at now))])
+      (core/->Result (cond-> next-execution
+                       stop? (assoc :execution/finished-at now))
+                     (:execution/pending-effects next-execution)
+                     nil
+                     (:execution/error next-execution)))
 
     ;; advance possibly an automated state machine advance
     :else
@@ -559,8 +572,11 @@
                                                                 :execution/step-ended-at now
                                                                 :execution/comment "Processed step")
           stop?                                          (should-stop? next-execution effects error)]
-      [stop? (cond-> next-execution
-               stop? (assoc :execution/finished-at now))])))
+      (core/->Result (cond-> next-execution
+                       stop? (assoc :execution/finished-at now))
+                     (:execution/pending-effects next-execution)
+                     nil
+                     (:execution/error next-execution)))))
 
 (defn- run-linear-execution
   "Runs an execution, saving its state into the database executions. Avoids
@@ -582,10 +598,13 @@
        timeout
        (loop [execution starting-execution
               input     input]
-         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
-               _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
+         (let [result         (step-execution! cofx fx state-machine execution input)
+               stop?          (core/result-stopped? result)
+               next-execution (:execution result)
+               _              (reset! latest-execution execution)
+               tx             (save-transitions fx stop? result)
+               ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
+               ]
            (if stop?
              (if (:ok @tx)
                next-execution
@@ -598,7 +617,7 @@
                         (:entity @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                     nil)))))
       (catch Exception e
-        (record-exception fx latest-execution e)))))
+        (record-exception fx @latest-execution e)))))
 
 (defn- run-linear-execution-inconsistent
   "Runs an execution, saving its state into the database executions. Avoids
@@ -620,10 +639,13 @@
        timeout
        (loop [execution starting-execution
               input     input]
-         (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
-               _                      (reset! latest-execution execution)
-               ;; TODO(jeff): save intermediate executions (under (map second transitions))
-               tx                     (save-execution fx next-execution {:can-fail? (not stop?)})]
+         (let [result         (step-execution! cofx fx state-machine execution input)
+               stop?          (core/result-stopped? result)
+               next-execution (:execution result)
+               _              (reset! latest-execution execution)
+               tx             (save-transitions fx stop? result)
+               ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
+               ]
            (if stop?
              (if (:ok @tx)
                next-execution
@@ -631,12 +653,12 @@
                                {:execution/id      (:execution/id execution)
                                 :execution/version (:execution/version execution)
                                 :tx                (dissoc @tx :exception)}
-                               (:exception @tx))))
+                               (:exception tx))))
              (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
                         next-execution)
                     nil)))))
       (catch Exception e
-        (record-exception fx latest-execution e)))))
+        (record-exception fx @latest-execution e)))))
 
 (defn- run-fair-execution
   "Partially runs an execution while managing its corresponding state in the
@@ -666,12 +688,15 @@
     (try
       (timed-run
        timeout
-       (let [[stop? next-execution] (step-execution! cofx fx state-machine execution input)
-             _                      (reset! latest-execution execution)
-             ;; TODO(jeff): save intermediate executions (under (map second transitions))
-             tx                     @(save-execution fx next-execution {:can-fail? (not stop?)})]
+       (let [result         (step-execution! cofx fx state-machine execution input)
+             stop?          (core/result-stopped? result)
+             next-execution (:execution result)
+             _              (reset! latest-execution execution)
+             tx             (save-transitions fx stop? result)
+             ;; tx             @(save-execution fx next-execution {:can-fail? (not stop?)})
+             ]
          (if stop?
-           (if (:ok tx)
+           (if (:ok @tx)
              next-execution
              (throw (ex-info "Failed to save execution"
                              {:execution/id      (:execution/id execution)
@@ -682,7 +707,7 @@
              (enqueue-execution fx (:execution/id execution) nil)
              next-execution))))
       (catch Exception e
-        (record-exception fx latest-execution e)))))
+        (record-exception fx @latest-execution e)))))
 
 (defn- sync-run
   ([fx state-machine execution] (sync-run fx state-machine execution nil))

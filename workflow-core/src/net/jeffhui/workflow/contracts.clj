@@ -38,10 +38,12 @@
 (defn statem-persistence [doc-name creator]
   (testing doc-name
     (testing "conforms to state machine persistence"
+      #_
       (testing "viewing case"
         (let [persistence (api/open (creator))]
-          (finally
-            (api/close persistence))))
+          (try
+            (finally
+              (api/close persistence)))))
       (testing "basic storage"
         (let [persistence (api/open (creator))]
           (try
@@ -176,6 +178,16 @@
                        (map (juxt :execution/id :execution/version) result))
                     "persistence should return 2 executions when fetching by state machine")
                 (is (= (seq expected) result)
+                    "persistence should return 2 executions when fetching by state machine")))
+
+            (testing "executions-for-statem returns a seq of executions for a given statem, ordered by latest started-at, reversed"
+              (let [result (api/executions-for-statem persistence
+                                                      (:execution/state-machine-id execution-step)
+                                                      {:version (:execution/state-machine-version execution-step)
+                                                       :reverse? true})
+                    expected [execution-step execution2-started]]
+                (is (= (map (juxt :execution/id :execution/version) expected)
+                       (map (juxt :execution/id :execution/version) result))
                     "persistence should return 2 executions when fetching by state machine"))))
 
           (testing "[exceptional cases]"
