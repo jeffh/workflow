@@ -18,13 +18,10 @@
   p/StateMachinePersistence
   (list-statem [_ {:keys [version limit offset]}]
     (let [s @state
-          machines (mapcat vals s)
-          allowed-version (when (= :latest version)
-                            (into #{}
-                                  (mapcat (juxt first (comp  vals)))
-                                  s))]
+          machines (mapcat vals s)]
       (cond->> machines
-        (= :latest version) (filter (comp allowed-versions (juxt :state-machine/id :state-machine/version)))
+        (= :latest version) (filter (comp (into #{} (mapcat (juxt first (comp  vals))) s)
+                                          (juxt :state-machine/id :state-machine/version)))
         offset (drop offset)
         limit (take limit))))
   (fetch-statem [_ state-machine-id version]
@@ -50,7 +47,7 @@
 
 (defrecord ExecutionPersistence [state]
   p/ExecutionPersistence
-  (executions-for-statem [_ state-machine-id {:keys [version limit offset]}]
+  (executions-for-statem [_ state-machine-id {:keys [version limit offset reverse?]}]
     (let [s @state]
       (cond->> (->>
                 (group-by :execution/id
@@ -62,10 +59,10 @@
                 (vals)
                 (map last)
                 (filter (comp #{state-machine-id} :execution/state-machine-id))
-                (sort-by (juxt :execution/enqueued-at))
-                reverse)
-        offset (drop offset)
-        limit  (take limit))))
+                (sort-by (juxt :execution/enqueued-at)))
+        reverse? reverse
+        offset   (drop offset)
+        limit    (take limit))))
   (fetch-execution [_ execution-id version]
     (let [s       @state
           version (if (= version :latest)

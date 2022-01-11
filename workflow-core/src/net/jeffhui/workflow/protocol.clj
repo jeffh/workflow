@@ -79,7 +79,7 @@
     "Returns a sequence of executions by a given state machine. Ordered by latest executions enqueued-at.
 
     Parameters:
-      options - {:limit int, :offset int, :version #{:latest, int, :all}}
+      options - {:limit int, :offset int, :version #{:latest, int, :all}, :reverse? bool}
         NOTE for implementations of this protocol: version is resolved by the [[Effects]] type to an integer.
     ")
   (fetch-execution [_ execution-id version]
