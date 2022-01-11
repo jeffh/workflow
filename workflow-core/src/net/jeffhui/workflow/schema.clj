@@ -242,7 +242,8 @@
         (nil? f)
         (symbol? f)
         (inst? f)
-        (uuid? f))
+        (uuid? f)
+        (boolean? f))
     true
 
     (tagged-literal? f)
