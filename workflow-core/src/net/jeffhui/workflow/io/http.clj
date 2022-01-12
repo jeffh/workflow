@@ -10,7 +10,7 @@
            java.net.http.HttpResponse
            java.net.http.HttpResponse$BodyHandlers
            java.util.concurrent.CompletableFuture
-		   java.util.function.Function
+           java.util.function.Function
            java.time.Duration
            java.net.URLEncoder))
 
