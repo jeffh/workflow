@@ -16,20 +16,20 @@
 (defn current-span ^Span [] (Span/current))
 (defn start-span ^Span
   ([^String name]
-   (let [s (-> (.spanBuilder ^Tracer @*tracer*)
-               (.setParent (Span/current))
+   (let [s (-> (.spanBuilder ^Tracer @*tracer* (str name))
+               (.setParent (.with (Context/current) (Span/current)))
                .startSpan)]
      (.makeCurrent s)
      s))
   ([^Context parent ^String name]
-   (let [s (-> (.spanBuilder ^Tracer @*tracer*)
-               (cond-> parent (.setParent parent))
+   (let [s (-> (.spanBuilder ^Tracer @*tracer* (str name))
+               (cond-> parent (.setParent (.with (Context/current) parent)))
                .startSpan)]
      (.makeCurrent s)
      s))
   ([^Tracer instance ^Context parent ^String name]
-   (let [s (-> (.spanBuilder ^Tracer instance)
-               (cond-> parent (.setParent parent))
+   (let [s (-> (.spanBuilder ^Tracer instance (str name))
+               (cond-> parent (.setParent (.with (Context/current) parent)))
                .startSpan)]
      (.makeCurrent s)
      s)))
