@@ -266,7 +266,7 @@
                                   :execution/input
                                   :t
                                   :execution/error
-                                  :execution/memory])
+                                  :execution/ctx])
                     {:duration-ms      (when (and (:execution/step-started-at sm) (:execution/step-ended-at sm))
                                          (double
                                           (/

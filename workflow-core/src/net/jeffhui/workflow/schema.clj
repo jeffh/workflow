@@ -145,7 +145,8 @@
    ;; [:execution/io [:maybe [:map-of any? Code]]]
    [:execution/mode string?]
    [:execution/state [:maybe StateId]] ;; nil indicates terminated
-   [:execution/memory any?]
+   [:execution/ctx any?]
+   [:execution/memory {:optional true} any?] ;; Deprecated: legacy key, now :execution/ctx
    [:execution/pause-state [:enum "ready" "await-input" "wait-fx" "finished"]]
    [:execution/pause-memory any?]
    [:execution/input any?]

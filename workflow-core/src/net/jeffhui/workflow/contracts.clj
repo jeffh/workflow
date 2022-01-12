@@ -376,7 +376,7 @@
                         :execution/input
                         :t
                         :execution/error
-                        :execution/memory])
+                        :execution/ctx])
                       (cond-> (get-in sm [:execution/input ::api/io]) (assoc-in [:execution/input ::api/io] '...)))))
          (mapcat #(api/fetch-execution-history fx (:execution/id %))
                  (api/executions-for-statem fx state-machine-id {:version :latest}))))))
@@ -439,15 +439,15 @@
              (letlocals
               (bind final-execution (loop [attempts 0
                                            e        (api/fetch-execution fx execution-id :latest)]
-                                      (if (or (#{"failed" "failed-resumable" "finished"} (:execution/status e))
+                                      (if (or (#{"failed" "failed-resumable" "finished"} (:execution/pause-state e))
                                               (< 10 attempts))
                                         e
                                         (do
                                           (Thread/sleep 5000)
                                           (recur (inc attempts) (api/fetch-execution fx execution-id :latest))))))
-              (when-not (= "finished" (:execution/status final-execution))
+              (when-not (= "finished" (:execution/pause-state final-execution))
                 (print-executions fx "order"))
-              (is (= "finished" (:execution/status final-execution))
+              (is (= "finished" (:execution/pause-state final-execution))
                   (format "expected execution to complete successfully:\n%s"
                           (pr-str final-execution)))
               #_(print-executions fx "order")))))
@@ -461,15 +461,15 @@
              (letlocals
               (bind final-execution (loop [attempts 0
                                            e        (api/fetch-execution fx execution-id :latest)]
-                                      (if (or (#{"failed" "failed-resumable" "finished"} (:execution/status e))
+                                      (if (or (#{"failed" "failed-resumable" "finished"} (:execution/pause-state e))
                                               (< 10 attempts))
                                         e
                                         (do
                                           (Thread/sleep 5000)
                                           (recur (inc attempts) (api/fetch-execution fx execution-id :latest))))))
-              (when-not (= "finished" (:execution/status final-execution))
+              (when-not (= "finished" (:execution/pause-state final-execution))
                 (print-executions fx "prepare-cart"))
-              (is (= "finished" (:execution/status final-execution))
+              (is (= "finished" (:execution/pause-state final-execution))
                   (format "expected execution to complete successfully:\n%s"
                           (pr-str final-execution)))
               (print-executions fx "prepare-cart")
@@ -489,7 +489,7 @@
                                       :net.jeffhui.workflow.core/return-to [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"]},
               :user-ended-at         nil,
               :return-to             [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"],
-              :memory                {:id "S1", :order "R10322", :delivered false},
+              :ctx                   {:id "S1", :order "R10322", :delivered false},
               :mode                  "async-throughput",
               :step-ended-at         nil,
               :completed-effects     nil,
@@ -504,14 +504,14 @@
 (def ^:private execution2-started
   (assoc execution-started
          :execution/id #uuid "7545E6ED-7151-4E0B-B60D-1972AE614D97"
-         :execution/memory {:order {:id "R5232"}}
+         :execution/ctx {:order {:id "R5232"}}
          :execution/enqueued-at (System/nanoTime)))
 
 (def ^:private irrelevant-execution-started
   (assoc execution-started
          :execution/state-machine-id "another-state-machine"
          :execution/id #uuid "DEA7115B-D3B3-485B-83E4-D6EE339897F7"
-         :execution/memory {:order {:id "R6322"}}
+         :execution/ctx {:order {:id "R6322"}}
          :execution/enqueued-at (System/nanoTime)))
 
 (def ^:private execution-step
@@ -527,7 +527,7 @@
               :input                 nil,
               :user-ended-at         nil,
               :return-to             [#uuid "a91cba9c-0d50-4522-adcb-9dd6221d6c41" #uuid "fb4c2d57-e81d-446d-b654-b70e9e74f941"],
-              :memory                {:id "S1", :order "R10322", :delivered false},
+              :ctx                   {:id "S1", :order "R10322", :delivered false},
               :mode                  "async-throughput",
               :step-ended-at         nil,
               :completed-effects     nil,

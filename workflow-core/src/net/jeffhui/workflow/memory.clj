@@ -178,6 +178,7 @@
       (wf/save-statem fx contracts/order-statem)
       (wf/save-statem fx contracts/shipment-statem)
       (p/register-execution-handler fx (wf/create-execution-handler fx)))
+
     #_
     (do
       (def out (wf/start fx "prepare-cart" {:skus #{"A1" "B2"}})))
@@ -216,7 +217,7 @@
                                 :execution/input
                                 :t
                                 #_:execution/error
-                                :execution/memory])))
+                                :execution/ctx])))
          (take 100
                (mapcat #(wf/fetch-execution-history fx (:execution/id %))
                        (wf/executions-for-statem fx "order" {:version :latest}))))))

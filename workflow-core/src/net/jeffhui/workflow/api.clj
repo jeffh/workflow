@@ -194,7 +194,9 @@
   (tracer/with-span [sp "io"]
     (tracer/set-attr-str sp "op" (pr-str op))
     (-> (if-let [code (get (:execution/io *execution*) op)]
-          (let [res (eval-action code *fx* io (:execution/memory *execution*) nil)]
+          (let [res (eval-action code *fx* io (or (:execution/ctx *execution*)
+                                                  (:execution/memory *execution*))
+                                 nil)]
             (if (fn? res)
               (apply res args)
               res))
@@ -530,7 +532,9 @@
                                                               (.printStackTrace t))))
                                       :invoke/io        (let [{:keys [input expr]} args]
                                                           (try
-                                                            (let [result (protocol/eval-action expr fx io (:execution/memory execution) input)]
+                                                            (let [result (protocol/eval-action expr fx io (or (:execution/ctx execution)
+                                                                                                              (:execution/memory execution))
+                                                                                               input)]
                                                               {:value result})
                                                             (catch Throwable t
                                                               {:error {:code      :error

@@ -27,7 +27,7 @@
    :execution/state-machine-version (:state-machine/version state-machine)
    :execution/state                 (:state-machine/start-at state-machine)
    :execution/pause-state           "ready"
-   :execution/memory                initial-context
+   :execution/ctx                   initial-context
    :execution/input                 input
    :execution/pause-memory          nil
    :execution/return-to             (or return-to (::return-to input))})
@@ -212,7 +212,8 @@
          state       (:execution/state execution)
          state-node  (get states state)
          actions     (:actions state-node)
-         data        (:execution/memory execution)]
+         data        (or (:execution/ctx execution)
+                         (:execution/memory execution))]
      (assert-arg state "Execution state cannot be nil: %s" (pr-str execution))
      (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
                                                                                       :possible-states (keys states)}))
@@ -263,8 +264,8 @@
                     next-resumers (not-empty (dissoc (:resumers (:execution/pause-memory execution)) rid))]
                 #_(debug-print "RESUME" (:execution/state-machine-id execution) resume)
                 (->Result (merge (next-ver execution)
-                                 {:execution/state  next-state
-                                  :execution/memory next-data}
+                                 {:execution/state next-state
+                                  :execution/ctx   next-data}
                                  (if next-resumers
                                    {:execution/pause-state  "wait-fx"
                                     :execution/pause-memory (assoc (:execution/pause-memory execution) :resumers next-resumers)}
@@ -318,7 +319,7 @@
                                                                         :original-input   input
                                                                         :resumers         {rid {:then (select-keys invoke [:state :context])}}}
                                                :execution/state        next-state
-                                               :execution/memory       next-data})
+                                               :execution/ctx          next-data})
                                        [{:op           :execution/start
                                          :args         {:state-machine-id state-machine-id
                                                         :execution-id     eid
@@ -345,7 +346,7 @@
                                                                         :original-input input
                                                                         :resumers       {rid {:then (select-keys invoke [:state :context])}}}
                                                :execution/state        next-state
-                                               :execution/memory       next-data})
+                                               :execution/ctx          next-data})
                                        [{:op           :execution/step
                                          :args         {:execution-id eid
                                                         :action       action-name
@@ -390,7 +391,7 @@
                                                                        :original-input input
                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}
                                               :execution/state        next-state
-                                              :execution/memory       next-data
+                                              :execution/ctx          next-data
                                               :execution/input        input})
                                       [{:op           :sleep/seconds
                                         :args         {:seconds (eval-expr! seconds data input)}
@@ -405,7 +406,7 @@
                                                                        :original-input input
                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}
                                               :execution/state        next-state
-                                              :execution/memory       next-data
+                                              :execution/ctx          next-data
                                               :execution/input        input})
                                       [{:op           :sleep/timestamp
                                         :args         {:timestamp (eval-expr! timestamp data input)}
@@ -434,7 +435,7 @@
                                            {:execution/pause-state  (ready-or-await-pause-state states next-state)
                                             :execution/pause-memory nil
                                             :execution/state        next-state
-                                            :execution/memory       next-data
+                                            :execution/ctx          next-data
                                             :execution/input        input})
                                     nil
                                     [{:id (:id action)}]
@@ -449,7 +450,7 @@
                                           {:execution/pause-state  (ready-or-await-pause-state states next-state)
                                            :execution/pause-memory nil
                                            :execution/state        next-state
-                                           :execution/memory       next-data
+                                           :execution/ctx          next-data
                                            :execution/input        input})
                                    nil
                                    [{:id (:id action)}]
@@ -589,6 +590,6 @@
 
 
   (next-execution cofx order-statem
-                  {:execution/version 6, :execution/finished-at nil, :execution/state "cart", :execution/pause-state "await-input", :execution/failed-at nil, :execution/state-machine-id "order", :execution/comment "Resuming execution (cart) on wf-kafka-scheduler", :execution/error nil, :execution/started-at 22568707267944, :execution/input {:net.jeffhui.workflow.api/action "fraud-approve"}, :execution/user-ended-at nil, :execution/return-to nil, :execution/memory {:order {:id "R3674"}}, :execution/mode "async-throughput", :execution/step-ended-at nil, :execution/completed-effects nil, :execution/pending-effects nil, :execution/enqueued-at 22568321789628, :execution/user-started-at nil, :execution/state-machine-version 1, :execution/step-started-at 22568810816506, :execution/id #uuid "9fefc55e-d10f-4ec9-8941-f4fdeabdc79c", :execution/pause-memory nil})
+                  {:execution/version 6, :execution/finished-at nil, :execution/state "cart", :execution/pause-state "await-input", :execution/failed-at nil, :execution/state-machine-id "order", :execution/comment "Resuming execution (cart) on wf-kafka-scheduler", :execution/error nil, :execution/started-at 22568707267944, :execution/input {:net.jeffhui.workflow.api/action "fraud-approve"}, :execution/user-ended-at nil, :execution/return-to nil, :execution/ctx {:order {:id "R3674"}}, :execution/mode "async-throughput", :execution/step-ended-at nil, :execution/completed-effects nil, :execution/pending-effects nil, :execution/enqueued-at 22568321789628, :execution/user-started-at nil, :execution/state-machine-version 1, :execution/step-started-at 22568810816506, :execution/id #uuid "9fefc55e-d10f-4ec9-8941-f4fdeabdc79c", :execution/pause-memory nil})
 
   )
