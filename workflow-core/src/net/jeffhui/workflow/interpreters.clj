@@ -36,7 +36,7 @@
 
 (defn clj-eval-action [edn-expr io context input output]
   (tracer/with-span [sp "clj-eval"]
-    (tracer/set-attr-str sp "expr" (pr-str expr))
+    (tracer/set-attr-str sp "expr" (pr-str edn-expr))
     (try
       (eval `(let [~'io      ~io
                    ~'ctx     ~context
