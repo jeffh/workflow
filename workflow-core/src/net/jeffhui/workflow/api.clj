@@ -481,7 +481,8 @@
                                                                (assoc :execution/error error
                                                                       :execution/step-ended-at now
                                                                       :execution/comment "Processed (input) step")
-                                                               (update :execution/pending-effects (comp not-empty (fnil into [])) effects))
+                                                               (update :execution/pending-effects (comp not-empty (fnil into [])) effects)
+                                                               (cond-> error (update :execution/version inc)))
             new-result                                     (assoc result :execution next-execution)]
         (cond-> new-result
           (core/result-stopped? new-result)
@@ -587,7 +588,8 @@
                                                                       :execution/pending-effects effects
                                                                       :execution/step-ended-at now
                                                                       :execution/comment "Processed effect result")
-                                                               (update :execution/completed-effects (comp not-empty subvec) 1))
+                                                               (update :execution/completed-effects (comp not-empty subvec) 1)
+                                                               (cond-> error (update :execution/version inc)))
             stop?                                          (should-stop? next-execution effects error)]
         (core/->Result (cond-> next-execution
                          stop? (assoc :execution/finished-at now))
@@ -601,11 +603,13 @@
                                                                                 (set/rename-keys input {::action ::core/action
                                                                                                         ::resume ::core/resume}))
             now                                            (now!)
-            next-execution                                 (assoc (:execution result)
-                                                                  :execution/error error
-                                                                  :execution/pending-effects effects
-                                                                  :execution/step-ended-at now
-                                                                  :execution/comment "Processed step")
+            next-execution                                 (-> (:execution result)
+                                                               (assoc
+                                                                :execution/error error
+                                                                :execution/pending-effects effects
+                                                                :execution/step-ended-at now
+                                                                :execution/comment "Processed step")
+                                                               (cond-> error (update :execution/version inc)))
             stop?                                          (should-stop? next-execution effects error)]
         (core/->Result (cond-> next-execution
                          stop? (assoc :execution/finished-at now))
