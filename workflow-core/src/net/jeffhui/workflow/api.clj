@@ -365,8 +365,6 @@
    :random-execution-id! random-uuid})
 (defn- save-transitions [fx stop? result]
   (let [opt {:can-fail? (not stop?)}]
-    (save-execution fx (:execution result) opt)
-    #_
     (if (seq (:transitions result))
       (last (for [mt (map meta (:transitions result))]
               (save-execution fx (:execution mt) opt)))
