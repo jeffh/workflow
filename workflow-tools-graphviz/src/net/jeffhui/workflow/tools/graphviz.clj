@@ -119,9 +119,9 @@
     (io/copy in-stream f)))
 
 (defn statem->file [statem format filename]
-  (-> contracts/order-statem
+  (-> statem
       statem->dot
-      (dot->bytes format)
+      (dot->stream format)
       (stream->file filename)))
 
 (comment
