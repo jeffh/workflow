@@ -30,134 +30,67 @@ something different.
 In short, the goal is make implementations effortless enough to allow people to
 better understand problems to solve instead of how to execute effectively.
 
+## Install
+
+Use [deps.edn](https://clojure.org/reference/deps_and_cli):
+
+```clojure
+;; NOTE: replace :git/sha value with the version you want to checkout
+
+
+;; all-dependencies as one (biggest, but includes everything)
+{:deps {net.jeffhui/workflow {:git/url "ssh://git@github.com/jeffh/workflow.git"
+                              :git/sha "75d4353c8b46f9748efff20da10090e29bebd774"}}}
+                              
+;; individual features a-la-carte:
+;; - workflow-core = basic library + in-memory implementations
+;; - workflow-jdbc-pg = postgres integration for persistence
+;; - workflow-kafka = kafka integration for scheduling
+;; - workflow-tools-graphviz = for visualizations (requires graphviz to be installed)
+;; - workflow-tools-webviewer = for web-based debugging of state machines and executions
+{:deps {net.jeffhui/workflow-core {:git/url   "ssh://git@github.com/jeffh/workflow.git"
+                                   :git/sha   "..."
+                                   :deps/root "workflow-core"}
+        net.jeffhui/workflow-jdbc-pg {:git/url   "ssh://git@github.com/jeffh/workflow.git"
+                                      :git/sha   "..."
+                                      :deps/root "workflow-jdbc-pg"}
+        net.jeffhui/workflow-kafka {:git/url   "ssh://git@github.com/jeffh/workflow.git"
+                                    :git/sha   "..."
+                                    :deps/root "workflow-kafka"}
+        net.jeffhui/workflow-tools-graphviz {:git/url   "ssh://git@github.com/jeffh/workflow.git"
+                                             :git/sha   "..."
+                                             :deps/root "workflow-tools-graphviz"}
+        net.jeffhui/workflow-tools-webviewer {:git/url   "ssh://git@github.com/jeffh/workflow.git"
+                                              :git/sha   "..."
+                                              :deps/root "workflow-tools-webviewer"}}}
+```
+
+You can then require them through the corresponding namespaces:
+
+ - (workflow-core) net.jeffhui.workflow.api - for the main API
+ - (workflow-core) net.jeffhui.workflow.memory - for using the in-memory implementation
+ - (workflow-core) net.jeffhui.workflow.protocol - for implementing your own backing stores (unstable)
+ - (workflow-core) net.jeffhui.workflow.contracts - for testing your protocol implements to the spec (unstable)
+ - (workflow-jdbc-pg) net.jeffhui.workflow.jdbc.pg - for postgres implementations
+ - (workflow-kafka) net.jeffhui.workflow.kafka - for kafka implementations
+ - (workflow-tools-graphviz) net.jeffhui.workflow.tools.graphviz - for generating diagrams
+ - (workflow-tools-webviewer) net.jeffhui.workflow.tools.webviewer - for viewing state machines + executions on a web ui for diagnostics
+
 ## Usage
 
 **Note: Nothing here is a stable API. Things are subject to change at this point in time.**
 
 ```clojure
-(require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed]]) ;; Uses Sci, alternative is ->Naive which uses eval
-(require '[net.jeffhui.workflow.api :as api])
-(require '[net.jeffhui.workflow.memory :as mem]) ;; in-memory implementation
-(require '[clojure.core.async :as async])
-(defn make []
-(let [statem (mem/make-statem-persistence)]
-  (api/effects {:statem      statem
-                :execution   (mem/make-execution-persistence statem)
-                :scheduler   (mem/make-scheduler)
-                :interpreter (->Sandboxed)})))
-
-(def fx (make))
-(api/save-statem fx #:state-machine{:id             "order"
-                                    :version        1
-                                    :start-at       "create"
-                                    :execution-mode "async-throughput"
-                                    :context        '{:order {:id (str "R" (+ 1000 (rand-int 10000)))}}
-                                    :states         '{"create"    {:always [{:name  "created"
-                                                                            :state "cart"}]}
-                                                      "cart"      {:actions {"add"    {:name    "added"
-                                                                                      :state   "cart"
-                                                                                      :context (update-in context [:order :line-items] (fnil into []) (repeat (:qty input 1) (:sku input)))}
-                                                                            "remove" {:name    "removed"
-                                                                                      :state   "cart"
-                                                                                      :context (letfn [(sub [a b]
-                                                                                                          (let [a (vec a)
-                                                                                                                n (count a)]
-                                                                                                            (loop [out (transient [])
-                                                                                                                  i   0
-                                                                                                                  b   (frequencies b)]
-                                                                                                              (if (= i n)
-                                                                                                                (persistent! out)
-                                                                                                                (let [ai (a i)]
-                                                                                                                  (if (pos? (b ai 0))
-                                                                                                                    (recur out (inc i) (update b ai dec))
-                                                                                                                    (recur (conj! out ai) (inc i) b)))))))]
-                                                                                                  (update-in context [:order :line-items] (fnil sub []) (repeat (:qty input 1) (:sku input))))}
-                                                                            "place"  {:state "submitted"}}}
-                                                      "submitted" {:actions {"fraud-approve" {:state "fraud-approved"}
-                                                                            "fraud-reject"  {:state "fraud-rejected"}}}
-
-                                                      "fraud-approved" {:always [{:state "released"}]}
-                                                      "fraud-rejected" {:actions {"cancel" {:state "canceled"}}}
-                                                      "released"       {:always [{:id     "ship"
-                                                                                  :name   "ship"
-                                                                                  :invoke {:state-machine ["shipment" 1]
-                                                                                          :input         {:order (:id (:order ctx))}
-                                                                                          :success       {:state   "ship-finished"
-                                                                                                          :context {:delivered (:delivered output)}}
-                                                                                          :error         {:state "canceled"}}}]}
-                                                      "ship-finished"  {:always [{:name  "fulfilled"
-                                                                                  :when  (:delivered ctx)
-                                                                                  :state "shipped"}
-                                                                                {:name  "canceled"
-                                                                                  :state "canceled"}]}
-                                                      "shipped"        {:end true}
-                                                      "canceled"       {:end true}}})
-(api/save-statem fx #:state-machin  e{:id             "shipment"
-                                    :version        1
-                                    :start-at       "created"
-                                    :execution-mode "async-throughput"
-                                    :context        '{:id        "S1"
-                                                      :order     (:order input)
-                                                      :delivered false}
-                                    :states         '{"created"     {:always [{:name  "fulfilled"
-                                                                                :state "outstanding"}]}
-                                                      "outstanding" {:always  [{:id     "fetch"
-                                                                                :name   "fetched"
-                                                                                :invoke {:given (io "http.request.json" :post "https://httpbin.org/anything" {:json-body {"n" (rand-int 10)}})
-                                                                                          :if    (<= 200 (:status output) 299)
-                                                                                          :then  {:state   "fetched"
-                                                                                                  :context {:response {:n (:n (:json (:body output)))}}}
-                                                                                          :else  {:state "failed"}}}]
-                                                                      :actions {"cancel" {:state "canceled"}}}
-                                                      "failed"      {:always [{:name     "retry"
-                                                                                :state    "outstanding"
-                                                                                :wait-for {:seconds 5}}]}
-
-                                                      "canceled" {:end    true
-                                                                  :return {:delivered false}}
-
-                                                      "fetched" {:always [{:name    "deliver"
-                                                                            :state   "delivered"
-                                                                            :when    (> 3 (:n (:response ctx)))
-                                                                            :context {:response nil
-                                                                                      :result   (:n (:response ctx))}}
-                                                                          {:name     "retry"
-                                                                            :state    "outstanding"
-                                                                            :context  {:response nil}
-                                                                            :wait-for {:seconds 5}}]}
-
-                                                      "delivered" {:end    true
-                                                                    :return {:delivered true}}}})
-
-
-(p/register-execution-handler fx (api/create-execution-handler fx))
-(def out (api/start fx "order" nil))
-(api/trigger fx (second out) {::api/action "add"
-                              ::api/reply? true
-                              :sku        "bns12"
-                              :qty        1})
-(api/trigger fx (second out) {::api/action "place"})
-(def res (api/trigger fx (second out) {::api/action "fraud-approve"
-                                       ::api/reply? true}))
-(async/take! res prn)
+;; TODO
 ```
 
 ## License
 
-Copyright © 2021 Jeff Hui
+Copyright © 2022 Jeff Hui
 
 This program and the accompanying materials are made available under the
 terms of the Eclipse Public License 2.0 which is available at
 http://www.eclipse.org/legal/epl-2.0.
-
-
-## Open Research Areas
-
-Here's some extra things to look into:
-
- - How to maintain high performance, despite more data being generated.
- - How to minimize the amount of need of escape hatches
- - How to share state machine implementations
 
 
 # Development
@@ -172,3 +105,11 @@ cd ..
 # run tests
 clojure -X:test
 ```
+
+## Open Research Areas
+
+Here's some extra things to look into:
+
+ - How to maintain high performance, despite more data being generated.
+ - How to minimize the amount of need of escape hatches
+ - How to share state machine implementations
