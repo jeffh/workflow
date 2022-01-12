@@ -217,6 +217,7 @@
      (assert-arg state "Execution state cannot be nil: %s" (pr-str execution))
      (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
                                                                                       :possible-states (keys states)}))
+     (tap> {::execution execution ::state-machine state-machine ::input input ::type :next-execution})
      #_(debug-print "STEP" (:execution/state-machine-id execution) (:execution/id execution) input)
      (vary-meta
       (if (contains? state-node :return)

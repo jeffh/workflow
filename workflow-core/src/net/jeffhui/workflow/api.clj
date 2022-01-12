@@ -176,6 +176,7 @@
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
 (defn- save-execution [persistence execution options]
   (tracer/with-span [sp "save-execution"]
+    (tap> {::execution execution ::type :save-execution})
     (protocol/save-execution persistence (s/debug-assert-execution execution) options)))
 
 (defn effects [{:keys [statem execution scheduler interpreter]}]
@@ -193,6 +194,7 @@
   [op & args]
   (tracer/with-span [sp "io"]
     (tracer/set-attr-str sp "op" (pr-str op))
+    (tap> {::io op :args args ::type :invoke-io})
     (-> (if-let [code (get (:execution/io *execution*) op)]
           (let [res (eval-action code *fx* io (or (:execution/ctx *execution*)
                                                   (:execution/memory *execution*))
@@ -425,6 +427,7 @@
                (recur (:entity @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                       nil)))))
         (catch Exception e
+          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -676,6 +679,7 @@
                           (:entity @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                       nil)))))
         (catch Exception e
+          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -719,6 +723,7 @@
                           next-execution)
                       nil)))))
         (catch Exception e
+          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -770,6 +775,7 @@
                (enqueue-execution fx (:execution/id execution) nil)
                next-execution))))
         (catch Exception e
+          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 

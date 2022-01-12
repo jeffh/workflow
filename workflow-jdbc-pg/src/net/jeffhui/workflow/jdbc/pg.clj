@@ -25,22 +25,26 @@
 (defn- record
   ([f ds parameterized-query]
    (try
+     (tap> {::sql parameterized-query})
      (f ds parameterized-query)
      (catch org.postgresql.util.PSQLException pe
+       (tap> {::sql parameterized-query ::exception pe})
        (let [msg (.getServerErrorMessage pe)]
          (throw (ex-info "Failed to execute SQL"
-                         {:sql (first parameterized-query)
-                          :values (rest parameterized-query)
+                         {:sql                (first parameterized-query)
+                          :values             (rest parameterized-query)
                           :pg-sql-state-error (some-> msg (.getSQLState))}
                          pe))))))
   ([f ds parameterized-query options]
    (try
+     (tap> {::sql parameterized-query})
      (f ds parameterized-query options)
      (catch org.postgresql.util.PSQLException pe
+       (tap> {::sql parameterized-query ::exception pe})
        (let [msg (.getServerErrorMessage pe)]
          (throw (ex-info "Failed to execute SQL"
-                         {:sql (first parameterized-query)
-                          :values (rest parameterized-query)
+                         {:sql                (first parameterized-query)
+                          :values             (rest parameterized-query)
                           :pg-sql-state-error (some-> msg (.getSQLState))}
                          pe)))))))
 

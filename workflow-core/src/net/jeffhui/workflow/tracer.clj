@@ -7,6 +7,20 @@
            io.opentelemetry.api.common.AttributeKey
            io.opentelemetry.context.Context))
 
+;;;;;;;;;;;;;; Tap based tracing
+
+(defn reset-taps []
+  (swap! #'clojure.core/tapset empty))
+
+(defmacro with-tap [f & body]
+  `(let [f# ~f]
+     (try
+       (add-tap f#)
+       ~@body
+       (finally (remove-tap f#)))))
+
+;;;;;;;;;;;;;;; OpenTelemetry based tracing
+
 ;; to enable, see https://opentelemetry.io/docs/instrumentation/java/manual_instrumentation/
 ;; and add: io.opentelemetry/opentelemetry-sdk {:mvn/version "1.10.0"}
 

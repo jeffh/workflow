@@ -2,6 +2,8 @@
   (:require [clojure.test :refer [deftest]]
             [net.jeffhui.workflow.jdbc.pg :as pg]
             [net.jeffhui.workflow.contracts :as contracts]
+            [net.jeffhui.workflow.memory :as mem]
+            [net.jeffhui.workflow.tracer :as tracer]
             [next.jdbc :as jdbc]
             next.jdbc.date-time))
 
@@ -13,7 +15,7 @@
     (let [db-spec {:jdbcUrl conn-url}]
       (try
         (pg/drop-tables! (jdbc/get-datasource db-spec))
-        (catch Exception _ nil))
+        (catch Exception e (.printStackTrace e)))
       (pg/make-persistence db-spec))))
 
 (defn- make-test-scheduler-persistence [conn-url]
@@ -21,7 +23,7 @@
     (let [db-spec {:jdbcUrl conn-url}]
       (try
         (pg/drop-tables! (jdbc/get-datasource db-spec))
-        (catch Exception _ nil))
+        (catch Exception e (.printStackTrace e)))
       (pg/make-scheduler-persistence db-spec))))
 
 (deftest pg-statem-persistence-contract
@@ -33,6 +35,14 @@
 (deftest pg-scheduler-persistence-contract
   (contracts/scheduler-persistence "Postgres Scheduler Persistence" (make-test-scheduler-persistence pg-url)))
 
+(deftest pg-e2e-contract
+  (contracts/effects "Postgres Statem + Execution Persistence"
+                     (fn []
+                       (let [p ((make-test-persistence pg-url))]
+                         {:statem    p
+                          :execution p
+                          :scheduler (mem/make-scheduler)}))))
+
 (deftest crdb-statem-persistence-contract
   (contracts/statem-persistence "CockroachDB Statem Persistence" (make-test-persistence crdb-url)))
 
@@ -41,3 +51,11 @@
 
 (deftest crdb-scheduler-persistence-contract
   (contracts/scheduler-persistence "CockroachDB Scheduler Persistence" (make-test-scheduler-persistence crdb-url)))
+
+(deftest crdb-e2e-contract
+  (contracts/effects "CockroachDB Statem + Execution Persistence"
+                     (fn []
+                       (let [p ((make-test-persistence crdb-url))]
+                         {:statem    p
+                          :execution p
+                          :scheduler (mem/make-scheduler)}))))
