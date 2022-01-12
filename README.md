@@ -17,7 +17,7 @@ issues, instead of trying to address them directly:
    to broaden understandability of the system as a whole (for everyone
    involved). Microservices should be easier, faster, & more reliable to build
    that an equivalent monolith.
- - "Micro** Tools: Tools tend to give a limit perspective to solve the wider
+ - "Micro" Tools: Tools tend to give a limit perspective to solve the wider
    problem. Error tracking, metrics, and log aggregations are a proxy to
    understanding what happened.
  - Processes: Specifications that are independent from code. There is a gap
