@@ -236,7 +236,14 @@
   state-machine-id = string? | [string? int?]
   execution-id = uuid?
 
-  Note: It isn't safe to for input to come from untrusted sources.
+  Returns one of the following values:
+   {:ok           true
+    :execution/id #uuid \"...\"
+    :execution    {...} | nil} ;; execution is returned if synchronous
+   {:ok    false
+    :error {...}}
+
+  WARNING: It isn't safe to for input to come from untrusted sources.
    - Recommended: validate input values before passing through this function.
    - Less Good Alternative: pass the untrusted input as a key in input.
   "
@@ -266,11 +273,12 @@
                input                 (:execution/input input)
                {:keys [begin error]} (executor (:execution/mode (s/debug-assert-execution execution)))]
            (cond
-             error        [false nil {:error error}]
-             (nil? begin) [false nil {:error "invalid executor"}]
+             error        {:ok false :error {:error error}}
+             (nil? begin) {:ok false :error {:error :invalid-executor}}
              :else        (begin fx state-machine execution input))))
-       [false nil {:error               ::state-machine-not-found
-                   :requested-statem-id state-machine-id}]))))
+       {:ok false
+        :error {:error               ::state-machine-not-found
+                :requested-statem-id state-machine-id}}))))
 
 (defn trigger
   "Triggers a state machine to follow a specific transition.
@@ -278,6 +286,11 @@
   Note: It isn't safe to for input to come from untrusted sources.
    - Recommended: validate input values before passing through this function.
    - Less Good Alternative: pass the untrusted input as a key in input.
+
+  If input includes:
+    ::reply? true
+  Then a clojure core/async channel is returned that will receive the execution.
+  Otherwise, nil is returned.
   "
   [fx execution-id input]
   (tracer/with-span [sp "trigger"]
@@ -501,12 +514,11 @@
                                       :execution/start (let [{:keys [state-machine-id execution-id input async?]}
                                                              args
 
-                                                             [ok execution-id execution]
+                                                             {execution-id :execution/id, :keys [ok execution]}
                                                              (start fx state-machine-id execution-id input)]
                                                          (when async?
                                                            (merge (when execution {:execution execution})
-                                                                  {:error        (if ok nil {:code   :error
-                                                                                             :reason "failed to start"})
+                                                                  {:error        (if ok nil {:error :invocation-failure})
                                                                    :execution/id execution-id})))
                                       :execution/step (let [{:keys [execution-id action input async?]}
                                                             args
@@ -518,7 +530,8 @@
                                                                                               {::reply? true})))]
                                                         (when result
                                                           (async/alt!!
-                                                            (async/timeout 10000) {:error {:code   :timed-out
+                                                            (async/timeout 10000) {:ok    false
+                                                                                   :error {:code   :timed-out
                                                                                            :reason "waiting for result to trigger execution has timed out"}}
                                                             result ([x] x))))
                                       :execution/return (let [to           (:to args)
@@ -537,7 +550,8 @@
                                                                                                input)]
                                                               {:value result})
                                                             (catch Throwable t
-                                                              {:error {:code      :error
+                                                              {:error {:error     :io-error
+                                                                       :code      :error
                                                                        :input     input
                                                                        :expr      expr
                                                                        :throwable (throwable->map t)}})))
@@ -546,17 +560,20 @@
                                                                                                 {::resume {:id     complete-ref
                                                                                                            :return {:sleep seconds}}})]
                                                           (when-not ok
-                                                            {:error {:code   :io
+                                                            {:error {:error  :sleep/seconds
+                                                                     :code   :io
                                                                      :reason "failed to schedule sleep by seconds"}}))
                                       :sleep/timestamp  (let [{:keys [timestamp]} args
                                                               ok                  (protocol/sleep-to fx timestamp (:execution/id execution)
                                                                                                      {::resume {:id     complete-ref
                                                                                                                 :return {:timestamp timestamp}}})]
                                                           (when-not ok
-                                                            {:error {:code   :io
+                                                            {:error {:error  :sleep/timestamp
+                                                                     :code   :io
                                                                      :reason "failed to schedule sleep until timestamp"}})))
                                     (catch Throwable t
-                                      {:error {:code      :error
+                                      {:error {:error     :uncaught-exception
+                                               :code      :error
                                                :throwable (throwable->map t)}}))]
                           (cond-> (-> execution
                                       (assoc :execution/step-ended-at (now!)
@@ -762,14 +779,18 @@
    (tracer/with-span [sp "sync-run"]
      (save-execution fx execution {:can-fail? false})
      (let [final-execution (run-sync-execution fx "synchronous-execution" state-machine execution input)]
-       [(= "finished" (:execution/pause-state final-execution)) (:execution/id execution) final-execution]))))
+       {:ok           (= "finished" (:execution/pause-state final-execution))
+        :execution/id (:execution/id execution)
+        :execution    final-execution}))))
 (defn- async-run
   ([fx state-machine execution] (async-run fx state-machine execution nil))
   ([fx state-machine execution input]
    (tracer/with-span [sp "async-run"]
      (let [ok (:ok @(save-execution fx execution {:can-fail? false}))]
        (when ok (enqueue-execution fx (:execution/id execution) input))
-       [(boolean ok) (when ok (:execution/id execution)) nil]))))
+       {:ok           (boolean ok)
+        :execution/id (when ok (:execution/id execution))
+        :execution    nil}))))
 
 (defmethod executor :default [mode] {:error ::unknown-executor :value mode})
 (defmethod executor "sync" [_] {:begin sync-run :step sync-run})

@@ -418,9 +418,10 @@
         ;;; test cases
         (testing "running a sample order"
           (letlocals
-           (bind [ok execution-id _finished-execution] (api/start fx "order" {::api/io '{"http.request.json" (fn [method uri res]
-                                                                                                               {:status 200
-                                                                                                                :body   {:json {:n (get (:json-body res) "n")}}})}}))
+           (bind {execution-id :execution/id, ok :ok}
+                 (api/start fx "order" {::api/io '{"http.request.json" (fn [method uri res]
+                                                                         {:status 200
+                                                                          :body   {:json {:n (get (:json-body res) "n")}}})}}))
            (is ok "Failed to start 'order' execution")
            (bind res-ch (api/trigger fx execution-id {::api/action "add"
                                                       ::api/reply? true
@@ -454,7 +455,7 @@
 
         (testing "state machines that trigger other machines asynchronously"
           (letlocals
-           (bind [ok execution-id _] (api/start fx "prepare-cart" {:skus #{"A1" "B2"}}))
+           (bind {execution-id :execution/id ok :ok} (api/start fx "prepare-cart" {:skus #{"A1" "B2"}}))
            (is ok "Failed to start 'prepare-cart' execution")
 
            (testing "verify execution completes"
