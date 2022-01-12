@@ -4,4 +4,5 @@
             metosin/malli                      {:mvn/version "0.6.2"}
             io.opentelemetry/opentelemetry-api {:mvn/version "1.10.0"}}
  :jvm-opts ["-XX:-OmitStackTraceInFastThrow"]
- :aliases  {:dev {:extra-paths ["test"]}}}
+ :aliases  {:dev {:extra-paths ["test"
+                                "../dev"]}}}

@@ -8,7 +8,9 @@
                                   "./workflow-jdbc-pg/test"
                                   "./workflow-kafka/test"
                                   "./workflow-tools-graphviz/test"
-                                  "./workflow-tools-webviewe/test"]}
+                                  "./workflow-tools-webviewer/test"
+                                  "./dev"]
+                    :deps        {org.clojure/tools.namespace {:mvn/version "1.2.0"}}}
             :build {:deps       {io.github.clojure/tools.build    {:git/tag "v0.6.2" :git/sha "226fb52"}
                                  io.github.seancorfield/build-clj {:git/tag "v0.5.2" :git/sha "8f75b81"}}
                     :paths      ["."]
