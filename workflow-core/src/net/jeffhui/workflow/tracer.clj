@@ -10,8 +10,10 @@
 ;; to enable, see https://opentelemetry.io/docs/instrumentation/java/manual_instrumentation/
 ;; and add: io.opentelemetry/opentelemetry-sdk {:mvn/version "1.10.0"}
 
-(def ^:dynamic *tracer*
-  (delay (GlobalOpenTelemetry/getTracer "net.jeffhui.workflow.core")))
+(defn get-tracer [library]
+  (GlobalOpenTelemetry/getTracer (str library)))
+
+(def ^:dynamic *tracer* (delay (get-tracer "net.jeffhui.workflow.core")))
 
 (defn current-span ^Span [] (Span/current))
 (defn start-span ^Span
@@ -28,7 +30,7 @@
      (.makeCurrent s)
      s))
   ([^Tracer instance ^Context parent ^String name]
-   (let [s (-> (.spanBuilder ^Tracer instance (str name))
+   (let [s (-> (.spanBuilder instance (str name))
                (cond-> parent (.setParent (.with (Context/current) parent)))
                .startSpan)]
      (.makeCurrent s)
