@@ -188,9 +188,18 @@
               (:execution/state e)))
   e)
 
-;; QUESTION(jeff): is this better to put in the protocols?
 (defn io
-  "Processes external io events. Also takes in consideration the any execution overrides."
+  "Processes external io events. Also takes in consideration the any execution overrides.
+
+  To invoke this function outside of a state machine, please use [[with-effects]]:
+    (with-effects fx state-machine execution
+      (io \"my-op\" :my :arguments :here))
+
+  To invoke this function within a state machine, this can only be called under
+  :invoke :call actions.
+
+  To extend io, please require protocol/io and add a multimethod.
+  "
   [op & args]
   (tracer/with-span [sp "io"]
     (tracer/set-attr-str sp "op" (pr-str op))

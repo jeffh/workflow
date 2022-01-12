@@ -142,7 +142,7 @@
    [:execution/version integer?]
    [:execution/state-machine-id string?]
    [:execution/state-machine-version integer?]
-   ;; [:execution/io [:maybe [:map-of any? Code]]]
+   [:execution/io {:optional true} [:maybe [:map-of any? Code]]]
    [:execution/mode string?]
    [:execution/state [:maybe StateId]] ;; nil indicates terminated
    [:execution/ctx any?]
