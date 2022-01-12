@@ -579,7 +579,7 @@
                                                            :state "failed"}]}
                                     "adding"   {:actions [{:id     "adding"
                                                            :when   (seq (:left ctx))
-                                                           :invoke {:trigger [(:order-eid ctx) "add"]
+                                                           :invoke {:execution [(:order-eid ctx) "add"]
                                                                     :input   {:sku (first (:left ctx))
                                                                               :qty 1}
                                                                     :state   "added"
