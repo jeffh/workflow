@@ -162,7 +162,7 @@
     state-machine - the state machine to save
     options - currently unused. Exists for future use.
 
-   Returns a (future {:ok bool, :entity {saved-state-machine...}})"
+   Returns a (future {:ok bool, :value {saved-state-machine...}, :error {...}})"
   [persistence statem]
   (tracer/with-span [sp "save-statem"]
     (let [errs (s/err-for-statem statem)]

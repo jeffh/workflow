@@ -139,7 +139,7 @@
   #_(locking *out*
     (println "Save " (:execution/id execution) (:execution/version execution) (:execution/comment execution)))
   #_(when (@debug [(:execution/id execution) (:execution/version execution)])
-    (throw (ex-info "NO" {:execution execution})))
+      (throw (ex-info "NO" {:execution execution})))
   #_(swap! debug conj [(:execution/id execution) (:execution/version execution)])
   (with-open [conn (jdbc/get-connection ds)]
     (try
@@ -181,24 +181,24 @@
                                   (:execution/user-ended-at execution)
                                   (freeze (:execution/error execution))
                                   (:execution/comment execution)])
-      {:ok     true
-       :entity execution}
+      {:ok    true
+       :value execution}
       (catch clojure.lang.ExceptionInfo ei
         (let [expected-unique "23505"]
           (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
             (if (= expected-unique sql-state)
-              {:ok        false
-               :error     :version-conflict
-               :exception ei}
+              {:ok    false
+               :error {:error     :version-conflict
+                       :throwable ei}}
               (throw ei))
             (throw ei))))
       (catch org.postgresql.util.PSQLException pe
         (let [expected-unique "23505"]
           (if-let [msg (.getServerErrorMessage pe)]
             (if (= expected-unique (.getSQLState msg))
-              {:ok        false
-               :error     :version-conflict
-               :exception pe}
+              {:ok    false
+               :error {:error     :version-conflict
+                       :throwable pe}}
               (throw pe))
             (throw pe)))))))
 
@@ -227,18 +227,47 @@
      pool
      ^Callable
      (fn []
-       (with-open [conn (jdbc/get-connection db-spec)]
-         (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?)"
-                                     (:state-machine/id state-machine)
-                                     (:state-machine/version state-machine)
-                                     (:state-machine/start-at state-machine)
-                                     (:state-machine/execution-mode state-machine)
-                                     (freeze (:state-machine/context state-machine))
-                                     (freeze (:state-machine/states state-machine))])
-         {:ok     true
-          :entity state-machine}))))
+       (try
+         (with-open [conn (jdbc/get-connection db-spec)]
+           (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?)"
+                                       (:state-machine/id state-machine)
+                                       (:state-machine/version state-machine)
+                                       (:state-machine/start-at state-machine)
+                                       (:state-machine/execution-mode state-machine)
+                                       (freeze (:state-machine/context state-machine))
+                                       (freeze (:state-machine/states state-machine))])
+           {:ok    true
+            :value state-machine})
+         (catch clojure.lang.ExceptionInfo ei
+           (let [expected-unique "23505"
+                 exception
+                 (or
+                  (when-let [sql-state (:pg-sql-state-error (ex-data ei))]
+                    (when (= expected-unique sql-state)
+                      (ex-info "state machine already exists with that version"
+                               {:error :version-conflict
+                                :state-machine/id (:state-machine/id state-machine)
+                                :state-machine/version (:state-machine/version state-machine)}
+                               ei)))
+                  ei)]
+             (tap> {::exception exception ::type :save-statem})
+             (throw exception)))
+         (catch org.postgresql.util.PSQLException pe
+           (let [expected-unique "23505"
+                 exception
+                 (or
+                  (when-let [msg (.getServerErrorMessage pe)]
+                    (when (= expected-unique (.getSQLState msg))
+                      (ex-info "state machine already exists with that version"
+                               {:error :version-conflict
+                                :state-machine/id (:state-machine/id state-machine)
+                                :state-machine/version (:state-machine/version state-machine)}
+                               pe)))
+                  pe)]
+             (tap> {::exception exception ::type :save-statem})
+             (throw exception)))))))
   p/ExecutionPersistence
-  (executions-for-statem [_ state-machine-id {:keys [version limit offset]}]
+  (executions-for-statem [_ state-machine-id {:keys [version limit offset reverse?]}]
     (with-open [conn (jdbc/get-connection ds)]
       (let [version (resolve-statem-version conn state-machine-id version)]
         (into []
@@ -246,7 +275,7 @@
               (jdbc/plan
                conn
                (cond
-                 limit ["SELECT e.* FROM workflow_executions e
+                 limit [(format "SELECT e.* FROM workflow_executions e
 INNER JOIN (
   SELECT id, MAX(version) as version FROM workflow_executions
   WHERE state_machine_id = ? AND state_machine_version = ?
@@ -254,11 +283,12 @@ INNER JOIN (
 ) as e2
 ON e.id = e2.id AND e.version = e2.version
 WHERE e.state_machine_id = ? AND e.state_machine_version = ?
-ORDER BY e.enqueued_at DESC LIMIT ? OFFSET ?;"
+ORDER BY e.enqueued_at %s LIMIT ? OFFSET ?;"
+                                (if reverse? "DESC" "ASC"))
                         state-machine-id version
                         state-machine-id version
                         limit (or offset 0)]
-                 :else ["SELECT e.* FROM workflow_executions e
+                 :else [(format "SELECT e.* FROM workflow_executions e
 INNER JOIN (
   SELECT id, MAX(version) as version FROM workflow_executions
   WHERE state_machine_id = ? AND state_machine_version = ?
@@ -266,7 +296,8 @@ INNER JOIN (
 ) as e2
 ON e.id = e2.id AND e.version = e2.version
 WHERE e.state_machine_id = ? AND e.state_machine_version = ?
-ORDER BY e.enqueued_at DESC;"
+ORDER BY e.enqueued_at %s;"
+                                (if reverse? "DESC" "ASC"))
                         state-machine-id version
                         state-machine-id version]))))))
   (fetch-execution [_ execution-id version]

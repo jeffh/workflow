@@ -34,12 +34,12 @@
     (let [{:state-machine/keys [id version]} state-machine]
       (future (if (and id version (integer? version))
                 {:ok     true
-                 :entity (get-in (swap! state assoc-in-if
-                                        [(:state-machine/id state-machine)
-                                         (:state-machine/version state-machine)]
-                                        nil?
-                                        state-machine)
-                                 [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
+                 :value (get-in (swap! state assoc-in-if
+                                       [(:state-machine/id state-machine)
+                                        (:state-machine/version state-machine)]
+                                       nil?
+                                       state-machine)
+                                [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
                 {:ok false})))))
 
 (defn make-statem-persistence []
@@ -76,11 +76,11 @@
   (save-execution [_ execution options]
     (assert (:execution/id execution))
     (assert (:execution/version execution))
-    (future {:ok     true
-             :entity (get-in (swap! state assoc-in [(:execution/id execution)
-                                                    (:execution/version execution)]
-                                    execution)
-                             [(:execution/id execution) (:execution/version execution)])})))
+    (future {:ok    true
+             :value (get-in (swap! state assoc-in [(:execution/id execution)
+                                                   (:execution/version execution)]
+                                   execution)
+                            [(:execution/id execution) (:execution/version execution)])})))
 
 (defn make-execution-persistence []
   (->ExecutionPersistence (atom {})))

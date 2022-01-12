@@ -53,7 +53,7 @@
                   (is (future? r) "save-statem should return a future")
                   (let [result (deref r 1000 :timeout)]
                     (is (:ok result) (format "save-statem should succeed: %s" (pr-str result))))
-                  (is (= order-statem (:entity (deref r 1000 :timeout))))))
+                  (is (= order-statem (:value (deref r 1000 :timeout))))))
 
               (testing "fetch-statem returns previously stored state machines"
                 (is (= order-statem (api/fetch-statem persistence
@@ -78,11 +78,11 @@
                     "persistence should return what was stored")))
 
             (testing "[exceptional cases]"
-              (testing "ignores duplicate state machine version"
+              (testing "errors on duplicate state machine version"
                 (let [r (api/save-statem persistence (assoc shipment-statem
                                                             :state-machine/id (:state-machine/id order-statem)
                                                             :state-machine/version (:state-machine/version order-statem)))]
-                  (is (not= :timeout (deref r 1000 :timeout))
+                  (is (thrown? Throwable @r)
                       "save may succeed or fail"))
 
                 (is (= order-statem (api/fetch-statem persistence (:state-machine/id order-statem) (:state-machine/version order-statem)))
@@ -119,7 +119,7 @@
               (let [r (protocol/save-execution persistence execution-started {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
-                (is (= execution-started (:entity (deref r 1000 :timeout))))))
+                (is (= execution-started (:value (deref r 1000 :timeout))))))
             (testing "fetch-execution returns the execution of the specific version"
               (is (= execution-started (api/fetch-execution persistence
                                                             (:execution/id execution-started)
@@ -138,7 +138,7 @@
               (let [r (protocol/save-execution persistence execution-step {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
-                (is (= execution-step (:entity (deref r 1000 :timeout))))))
+                (is (= execution-step (:value (deref r 1000 :timeout))))))
             (testing "fetch-execution returns the execution of the specific version"
               (is (= execution-step (api/fetch-execution persistence
                                                             (:execution/id execution-step)
@@ -158,7 +158,7 @@
               (let [r (protocol/save-execution persistence execution2-started {:can-fail? false})]
                 (is (future? r) "save-execution should return a future")
                 (is (:ok (deref r 1000 :timeout)) "save-execution should succeed")
-                (is (= execution2-started (:entity (deref r 1000 :timeout))))))
+                (is (= execution2-started (:value (deref r 1000 :timeout))))))
             (testing "fetch-execution returns the execution of the specific version"
               (is (= execution2-started (api/fetch-execution persistence
                                                              (:execution/id execution2-started)
