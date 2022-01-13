@@ -176,8 +176,14 @@
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
 (defn- save-execution [persistence execution options]
   (tracer/with-span [sp "save-execution"]
-    (tap> {::execution execution ::type :save-execution})
-    (protocol/save-execution persistence (s/debug-assert-execution execution) options)))
+    (let [res (protocol/save-execution persistence (s/debug-assert-execution execution) options)]
+      (if (future? res)
+        (future (let [ret @res]
+                  (tap> {::execution execution ::options options ::type :save-execution ::ok (:ok ret) ::error (:error ret)})
+                  ret))
+        (do
+          (tap> {::execution execution ::options options ::type :save-execution ::result res})
+          res)))))
 
 (defn effects [{:keys [statem execution scheduler interpreter]}]
   {:pre [statem execution scheduler interpreter]}
@@ -390,10 +396,16 @@
    :random-resume-id!    random-uuid
    :random-execution-id! random-uuid})
 (defn- save-transitions [fx stop? result]
+  (tap> {::type :save-transitions ::transitions (:transitions result)})
   (let [opt {:can-fail? (not stop?)}]
     (if (seq (:transitions result))
-      (last (for [mt (map meta (:transitions result))]
-              (save-execution fx (:execution mt) opt)))
+      (let [futs (for [mt (map meta (:transitions result))
+                       :let [e (:execution mt)]
+                       :when e]
+                   (save-execution fx e opt))]
+        (doseq [f (butlast futs)]
+          @f)
+        (last futs))
       (save-execution fx (:execution result) opt))))
 
 (defn- run-sync-execution
@@ -433,7 +445,7 @@
                                  {:execution/id      (:execution/id execution)
                                   :execution/version (:execution/version execution)
                                   :tx                @tx})))
-               (recur (:entity @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
+               (recur (:value @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                       nil)))))
         (catch Exception e
           (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
@@ -685,7 +697,7 @@
                                   :tx                (dissoc @tx :exception)}
                                  (:exception @tx))))
                (recur (do (deref tx 1000 ::timeout)
-                          (:entity @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
+                          (:value @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                       nil)))))
         (catch Exception e
           (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
@@ -835,7 +847,7 @@
                                     (empty? (:execution/completed-effects e)))
                        ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
                        (when-let [res (acquire-execution fx executor-name e input {:can-fail? false})]
-                         (if-let [e (:entity (deref res 10000 nil))]
+                         (if-let [e (:value (deref res 10000 nil))]
                            [e input]
                            (do
                              (Thread/sleep (* attempts attempts))

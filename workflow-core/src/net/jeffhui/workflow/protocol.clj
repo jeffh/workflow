@@ -60,7 +60,7 @@
     state-machine - the state machine to save
     options - currently unused. Exists for future use.
 
-	 Returns a future of {:ok bool, :entity {saved-state-machine...}}"))
+	 Returns a future of {:ok bool, :value {saved-state-machine...}}"))
 
 (defprotocol ExecutionPersistence
   (list-executions [_ options]
@@ -99,7 +99,7 @@
                     runtime may check if the persistence failed even if
                     can-fail? is true.
 
-     Returns a future of {:ok bool, :entity {saved-execution...}}"))
+     Returns a future of {:ok bool, :value {saved-execution...}}"))
 
 ;; Optional protocol that some schedulers may use to outsource their ability to schedule task in the future
 ;; NOTE(jeff): not final and subject to change

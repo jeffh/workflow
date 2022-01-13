@@ -363,21 +363,20 @@
    (sort-by
     (juxt :t)
     (map (fn [sm]
-           (merge {:execution/event-name ""}
-                  (-> sm
-                      (assoc :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
-                                 (:execution/version sm)])
-                      (select-keys
-                       [:execution/state-machine-id
-                        :execution/state
-                        :execution/status
-                        :execution/event-name
-                        :execution/comment
-                        :execution/input
-                        :t
-                        :execution/error
-                        :execution/ctx])
-                      (cond-> (get-in sm [:execution/input ::api/io]) (assoc-in [:execution/input ::api/io] '...)))))
+           (-> sm
+               (assoc :t [(or (:execution/step-started-at sm) (:execution/enqueued-at sm))
+                          (:execution/version sm)])
+               (select-keys
+                [:execution/state-machine-id
+                 :execution/state
+                 :execution/status
+                 :execution/pending-effects
+                 :execution/comment
+                 :execution/input
+                 :t
+                 :execution/error
+                 :execution/ctx])
+               (cond-> (get-in sm [:execution/input ::api/io]) (assoc-in [:execution/input ::api/io] '...))))
          (mapcat #(api/fetch-execution-history fx (:execution/id %))
                  (api/executions-for-statem fx state-machine-id {:version :latest}))))))
 

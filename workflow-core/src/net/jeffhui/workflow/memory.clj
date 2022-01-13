@@ -160,6 +160,12 @@
   ([buf-size] (->Scheduler (async/chan buf-size) (atom {}))))
 
 (comment
+  (def store (atom []))
+  (def tapper (fn [m] (swap! store conj m)))
+  (add-tap tapper)
+  (remove-tap tapper)
+  (net.jeffhui.workflow.tracer/reset-taps)
+
   (do
     (do
       (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
@@ -186,16 +192,20 @@
       (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
                                                                     {:status 200
                                                                      :body   (:json-body res)})}}))
-      (wf/trigger fx (second out) {::wf/action "add"
-                                   ::wf/reply? true
-                                   :sku        "bns12"
-                                   :qty        1})
+
+      (wf/trigger fx (:execution/id out) {::wf/action "add"
+                                          ::wf/reply? true
+                                          :sku        "bns12"
+                                          :qty        1})
       #_(Thread/sleep 100)
-      (wf/trigger fx (second out) {::wf/action "place"})
+      (wf/trigger fx (:execution/id out) {::wf/action "place"})
       #_(Thread/sleep 100)
-      (def res (wf/trigger fx (second out) {::wf/action "fraud-approve"
-                                            ::wf/reply? true}))
+      (def res (wf/trigger fx (:execution/id out) {::wf/action "fraud-approve"
+                                                   ::wf/reply? true}))
       (async/take! res prn)))
+
+  (count @store)
+  
 
   out
 
@@ -227,7 +237,7 @@
               (mapcat #(wf/fetch-execution-history fx (:execution/id %))
                       (wf/executions-for-statem fx "order" {:version :latest}))))
 
-  (wf/fetch-execution fx (second out) :latest)
+  (wf/fetch-execution fx (:execution/id out) :latest)
 
   (do
     (require 'clojure.inspector)
@@ -250,7 +260,7 @@
   (clojure.pprint/print-table
    (take 10
          (sort-by :execution/version
-                  (vals (get @(:state (:execution-persistence fx)) (second out))))))
+                  (vals (get @(:state (:execution-persistence fx)) (:execution/id out))))))
 
   (clojure.pprint/print-table
    (sort-by (juxt :execution/step-started-at :execution/state-machine-id :execution/version)

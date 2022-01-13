@@ -581,7 +581,7 @@
   se7
   se8
 
-  (meta (first (:transitions se6)))
+  (map meta (:transitions se2))
 
   (next-execution cofx order-statem (:execution se5)
                   {::resume {:id (:complete-ref (first (:effects se5)))
