@@ -58,14 +58,25 @@
 (defn set-attr-str ^Span [^Span span ^String key value] (.setAttribute span key (str value)) span)
 (defn record-exception [^Span span ^Throwable t] (.recordException span t))
 
-(defmacro with-span [[span-sym start-span-args] & body]
-  `(let [~span-sym (start-span ~@(if (vector? start-span-args)
-                                   start-span-args
-                                   [start-span-args]))]
-     (try
-       ~@body
-       (catch Throwable t#
-         (record-exception ~span-sym t#)
-         (throw t#))
-       (finally
-         (end-span ~span-sym)))))
+(defmacro with-span
+  ([[span-sym start-span-args] body]
+   {:pre [span-sym start-span-args]}
+   `(with-span @*tracer* nil [~span-sym ~start-span-args] ~body))
+  ([parent [span-sym start-span-args] body]
+   {:pre [span-sym start-span-args]}
+   `(with-span @*tracer* ~parent [~span-sym ~start-span-args] ~body))
+  ([tracer parent [span-sym start-span-args] body]
+   {:pre [tracer span-sym start-span-args]}
+   `(let [parent# (or ~parent (Span/current))
+          ~span-sym (start-span ~tracer
+                                parent#
+                                ~@(if (vector? start-span-args)
+                                    start-span-args
+                                    [start-span-args]))]
+      (try
+        ~@body
+        (catch Throwable t#
+          (record-exception ~span-sym t#)
+          (throw t#))
+        (finally
+          (end-span ~span-sym))))))

@@ -1,6 +1,7 @@
 (ns net.jeffhui.workflow.jdbc.pg
   (:require [net.jeffhui.workflow.protocol :as p]
             [net.jeffhui.workflow.api :as wf]
+            [net.jeffhui.workflow.tracer :as tracer]
             [taoensso.nippy :as nippy]
             [clojure.set :as set]
             [next.jdbc :as jdbc]
@@ -15,6 +16,8 @@
            java.util.UUID
            java.util.Date))
 
+(def ^:private tracer (tracer/get-tracer "net.jeffhui.workflow.jdbc.pg"))
+
 ;; NOTE(jeff): defined to provider easier debugging for serialization issues
 (defn- freeze [v]
   (nippy/fast-freeze v))
@@ -24,29 +27,39 @@
 
 (defn- record
   ([trace-name f ds parameterized-query]
-   (try
-     (tap> {::type trace-name ::sql parameterized-query})
-     (f ds parameterized-query)
-     (catch org.postgresql.util.PSQLException pe
-       (tap> {::type trace-name ::sql parameterized-query ::exception pe})
-       (let [msg (.getServerErrorMessage pe)]
-         (throw (ex-info "Failed to execute SQL"
-                         {:sql                (first parameterized-query)
-                          :values             (rest parameterized-query)
-                          :pg-sql-state-error (some-> msg (.getSQLState))}
-                         pe))))))
+   (let [sp (tracer/start-span tracer (tracer/current-span) "run-sql")]
+     (try
+       (tracer/set-attr-str sp "sql" (first parameterized-query))
+       (tap> {::type trace-name ::sql parameterized-query})
+       (f ds parameterized-query)
+       (catch org.postgresql.util.PSQLException pe
+         (tracer/record-exception sp pe)
+         (tap> {::type trace-name ::sql parameterized-query ::exception pe})
+         (let [msg (.getServerErrorMessage pe)]
+           (throw (ex-info "Failed to execute SQL"
+                           {:sql                (first parameterized-query)
+                            :values             (rest parameterized-query)
+                            :pg-sql-state-error (some-> msg (.getSQLState))}
+                           pe))))
+       (finally
+         (tracer/end-span sp)))))
   ([trace-name f ds parameterized-query options]
-   (try
-     (tap> {::type trace-name ::sql parameterized-query})
-     (f ds parameterized-query options)
-     (catch org.postgresql.util.PSQLException pe
-       (tap> {::type trace-name ::sql parameterized-query ::exception pe})
-       (let [msg (.getServerErrorMessage pe)]
-         (throw (ex-info "Failed to execute SQL"
-                         {:sql                (first parameterized-query)
-                          :values             (rest parameterized-query)
-                          :pg-sql-state-error (some-> msg (.getSQLState))}
-                         pe)))))))
+   (let [sp (tracer/start-span tracer (tracer/current-span) "run-sql")]
+     (try
+       (tracer/set-attr-str sp "sql" (first parameterized-query))
+       (tap> {::type trace-name ::sql parameterized-query})
+       (f ds parameterized-query options)
+       (catch org.postgresql.util.PSQLException pe
+         (tracer/record-exception sp pe)
+         (tap> {::type trace-name ::sql parameterized-query ::exception pe})
+         (let [msg (.getServerErrorMessage pe)]
+           (throw (ex-info "Failed to execute SQL"
+                           {:sql                (first parameterized-query)
+                            :values             (rest parameterized-query)
+                            :pg-sql-state-error (some-> msg (.getSQLState))}
+                           pe))))
+       (finally
+         (tracer/end-span sp))))))
 
 (defn drop-tables!
   "Deletes all data. Please, I hope you know what you're doing."
