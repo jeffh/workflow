@@ -203,7 +203,7 @@
              :execution-persistence exec
              :state-machine-persistence statem)))
   StateMachinePersistence
-  (list-statem [_ options] (list-statem :state-machine-persistence options))
+  (list-statem [_ options] (list-statem state-machine-persistence options))
   (fetch-statem [_ state-machine-id version] (fetch-statem state-machine-persistence state-machine-id version))
   (save-statem [_ state-machine options] (save-statem state-machine-persistence state-machine options))
   ExecutionPersistence

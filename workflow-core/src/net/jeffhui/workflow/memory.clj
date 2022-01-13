@@ -47,6 +47,14 @@
 
 (defrecord ExecutionPersistence [state]
   p/ExecutionPersistence
+  (list-executions [_ {:keys [limit offset]}]
+    (let [s @state]
+      (->>
+       (mapcat vals (vals s))
+       (sort-by :execution/enqueued-at)
+       reverse
+       (drop (or offset 0))
+       (take (or limit 100)))))
   (executions-for-statem [_ state-machine-id {:keys [version limit offset reverse?]}]
     (let [s @state]
       (cond->> (->>

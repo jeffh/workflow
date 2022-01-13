@@ -18,7 +18,8 @@
    ["Executions" ::list-executions]])
 
 (defn- get-accept [req]
-  (let [accepts (string/lower-case (get (:headers req) "accept"))]
+  (let [accepts (string/lower-case (or (get (:headers req) "accept")
+                                       ""))]
     (accept->keyword accepts :html)))
 
 (defn default-layout [options {::r/keys [router match] :as req} {:keys [status data to-html]}]
@@ -34,36 +35,38 @@
     :text {:status  (int status)
            :headers {"Content-Type" "text/plain"}
            :body    (with-out-str
-                   (if (map? data)
-                     (doseq [[f v] data]
-                       (println (str f ":"))
-                       (if (coll? v)
-                         (pprint/print-table v)
-                         (pprint/pprint v)))
-                     (pprint/pprint data)))}
+                      (if (map? data)
+                        (doseq [[f v] data]
+                          (println (str f ":"))
+                          (if (coll? v)
+                            (pprint/print-table v)
+                            (pprint/pprint v)))
+                        (pprint/pprint data)))}
 
     (let [nav (or (:nav options)
                   [["Machines" ::list-machines]
                    ["Executions" ::list-executions]])]
-      {:status (int status)
-       :body   (html
-                [:html {:lang "en"}
-               [:head
-                [:title "Workflow Webviewer"]
-                [:link {:href (r/match-by-name router ::asset)}]]
-               [:body
-                [:header
-                 [:h1 "Workflow Webviewer"]
-                 [:ul#main-nav
-                  (for [[text id] nav]
-                    [:li [:a.block
-                          {:id    (str id)
-                           :href  (r/match-by-name router id)
-                           :class (when (= id (:name match))
-                                    "selected")}
-                          text]])]]
-                [:main
-                 (to-html data)]]])})))
+      {:status  (int status)
+       :headers {"Content-Type" "text/html"}
+       :body    (str
+                 (html
+                  [:html {:lang "en"}
+                   [:head
+                    [:title "Workflow Webviewer"]
+                    [:link {:href (r/match-by-name router ::asset)}]]
+                   [:body
+                    [:header
+                     [:h1 "Workflow Webviewer"]
+                     [:ul#main-nav
+                      (for [[text id] nav]
+                        [:li [:a.block
+                              {:id    (str id)
+                               :href  (r/match->path (r/match-by-name router id))
+                               :class (when (= id (:name match))
+                                        "selected")}
+                              text]])]]
+                    [:main
+                     (to-html data)]]]))})))
 
 (defn- layout [options req response-data]
   (let [layer (or (:layout options)
@@ -73,7 +76,7 @@
 (defn redirect-to [id]
   (fn handler [{::r/keys [router]}]
     {:status 302
-     :headers {"Location" (r/match-by-name router id)}}))
+     :headers {"Location" (r/match->path (r/match-by-name router id))}}))
 
 (defn list-state-machines [fx options]
   (fn handler [req]
@@ -110,17 +113,43 @@
   (rring/router
    [["/machines" {:name ::list-machines
                   :get (list-state-machines fx options)}]
+    ["/machines/:id/:version" {:name ::show-machine-version
+                               :get show-state-machine}]
     ["/machines/:id" {:name ::show-machine
                       :get show-state-machine}]
-    ["/machines/:id/:version" {:name ::show-machine
-                               :get show-state-machine}]
     ["/executions" {:name ::list-executions
-                    :get list-executions}]
+                    :get (list-executions fx options)}]
+    ["/executions/:id/:version" {:name ::show-execution-version
+                                 :get show-execution}]
     ["/executions/:id" {:name ::show-execution
                         :get show-execution}]
-    ["/executions/:id/:version" {:name ::show-execution
-                                 :get show-execution}]
     ["/assets/*" {:name ::asset
                   :get (rring/create-resource-handler)}]
     ["/" {:name ::home
           :get (redirect-to ::list-machines)}]]))
+
+
+(comment
+  (do
+    (require '[net.jeffhui.workflow.api :as api])
+    (require '[net.jeffhui.workflow.memory :as mem])
+    (require '[net.jeffhui.workflow.interpreters :refer [->Sandboxed ->Naive]] :reload)
+    (defn make []
+      (api/effects {:statem      (mem/make-statem-persistence)
+                    :execution   (mem/make-execution-persistence)
+                    :scheduler   (mem/make-scheduler)
+                    :interpreter (->Sandboxed)}))
+    (def fx (api/open (make))))
+
+  (r/match-by-name (create-router fx {}) ::show-machine)
+
+  ((list-state-machines fx {})
+   {:request-method :get
+    :uri "/machines"
+    :scheme :http
+    :server-port 8888
+    :server-name "localhost"
+    :body ""})
+
+  )
+
