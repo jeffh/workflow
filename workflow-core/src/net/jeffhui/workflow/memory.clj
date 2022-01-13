@@ -197,6 +197,7 @@
                                           ::wf/reply? true
                                           :sku        "bns12"
                                           :qty        1})
+
       #_(Thread/sleep 100)
       (wf/trigger fx (:execution/id out) {::wf/action "place"})
       #_(Thread/sleep 100)

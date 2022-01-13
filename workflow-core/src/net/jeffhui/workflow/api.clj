@@ -179,10 +179,10 @@
     (let [res (protocol/save-execution persistence (s/debug-assert-execution execution) options)]
       (if (future? res)
         (future (let [ret @res]
-                  (tap> {::execution execution ::options options ::type :save-execution ::ok (:ok ret) ::error (:error ret)})
+                  (tap> {::type :save-execution ::execution execution ::options options ::ok (:ok ret) ::error (:error ret)})
                   ret))
         (do
-          (tap> {::execution execution ::options options ::type :save-execution ::result res})
+          (tap> {::type :save-execution ::execution execution ::options options ::result res})
           res)))))
 
 (defn effects [{:keys [statem execution scheduler interpreter]}]
@@ -209,7 +209,7 @@
   [op & args]
   (tracer/with-span [sp "io"]
     (tracer/set-attr-str sp "op" (pr-str op))
-    (tap> {::io op :args args ::type :invoke-io})
+    (tap> {::type :invoke-io ::io op :args args})
     (-> (if-let [code (get (:execution/io *execution*) op)]
           (let [res (eval-action code *fx* io (or (:execution/ctx *execution*)
                                                   (:execution/memory *execution*))
@@ -399,13 +399,13 @@
   (tap> {::type :save-transitions ::transitions (:transitions result)})
   (let [opt {:can-fail? (not stop?)}]
     (if (seq (:transitions result))
-      (let [futs (for [mt (map meta (:transitions result))
-                       :let [e (:execution mt)]
-                       :when e]
-                   (save-execution fx e opt))]
-        (doseq [f (butlast futs)]
-          @f)
-        (last futs))
+      (last
+       (for [mt (map meta (:transitions result))
+             :let [e (:execution mt)]
+             :when e]
+         (let [f (save-execution fx e opt)]
+           (deref r 1 ::timeout) ;; here to induce partial ordering
+           f)))
       (save-execution fx (:execution result) opt))))
 
 (defn- run-sync-execution
@@ -448,7 +448,7 @@
                (recur (:value @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                       nil)))))
         (catch Exception e
-          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
+          (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -700,7 +700,7 @@
                           (:value @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                       nil)))))
         (catch Exception e
-          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
+          (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -744,7 +744,7 @@
                           next-execution)
                       nil)))))
         (catch Exception e
-          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
+          (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 
@@ -796,7 +796,7 @@
                (enqueue-execution fx (:execution/id execution) nil)
                next-execution))))
         (catch Exception e
-          (tap> {::execution @latest-execution ::exception e ::type :execution-exception})
+          (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
 

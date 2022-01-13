@@ -23,24 +23,24 @@
   (nippy/fast-thaw v))
 
 (defn- record
-  ([f ds parameterized-query]
+  ([trace-name f ds parameterized-query]
    (try
-     (tap> {::sql parameterized-query})
+     (tap> {::type trace-name ::sql parameterized-query})
      (f ds parameterized-query)
      (catch org.postgresql.util.PSQLException pe
-       (tap> {::sql parameterized-query ::exception pe})
+       (tap> {::type trace-name ::sql parameterized-query ::exception pe})
        (let [msg (.getServerErrorMessage pe)]
          (throw (ex-info "Failed to execute SQL"
                          {:sql                (first parameterized-query)
                           :values             (rest parameterized-query)
                           :pg-sql-state-error (some-> msg (.getSQLState))}
                          pe))))))
-  ([f ds parameterized-query options]
+  ([trace-name f ds parameterized-query options]
    (try
-     (tap> {::sql parameterized-query})
+     (tap> {::type trace-name ::sql parameterized-query})
      (f ds parameterized-query options)
      (catch org.postgresql.util.PSQLException pe
-       (tap> {::sql parameterized-query ::exception pe})
+       (tap> {::type trace-name ::sql parameterized-query ::exception pe})
        (let [msg (.getServerErrorMessage pe)]
          (throw (ex-info "Failed to execute SQL"
                          {:sql                (first parameterized-query)
@@ -51,12 +51,12 @@
 (defn drop-tables!
   "Deletes all data. Please, I hope you know what you're doing."
   [ds]
-  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_executions"])
-  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_statemachines"])
-  (record jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_scheduler_tasks"]))
+  (record :drop-tables! jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_executions"])
+  (record :drop-tables! jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_statemachines"])
+  (record :drop-tables! jdbc/execute! ds ["DROP TABLE IF EXISTS workflow_scheduler_tasks"]))
 
 (defn- ensure-statem-table [ds]
-  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_statemachines (
+  (record :ensure-statem-table jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_statemachines (
     id TEXT NOT NULL,
     version BIGINT NOT NULL,
 	start_at TEXT NOT NULL,
@@ -67,7 +67,7 @@
   );"]))
 
 (defn- ensure-executions-table [ds]
-  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_executions (
+  (record :ensure-executions-table jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_executions (
     id UUID NOT NULL,
 	version BIGINT NOT NULL,
 	state_machine_id TEXT NOT NULL,
@@ -91,7 +91,7 @@
   CREATE INDEX IF NOT EXISTS workflow_executions_statem ON workflow_executions (state_machine_id, state_machine_version, enqueued_at);"]))
 
 (defn- ensure-scheduler-table [ds]
-  (record jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_scheduler_tasks (
+  (record :ensure-scheduler-table jdbc/execute! ds ["CREATE TABLE IF NOT EXISTS workflow_scheduler_tasks (
     id TEXT PRIMARY KEY NOT NULL,
     execution_id UUID NOT NULL,
     start_after BIGINT NOT NULL,
@@ -125,14 +125,14 @@
 
 (defn- resolve-statem-version [conn state-machine-id version]
   (if (= :latest version)
-    (:version (record jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_statemachines WHERE id = ?"
+    (:version (record :resolve-statem-version jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_statemachines WHERE id = ?"
                                        state-machine-id]
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
 
 (defn- resolve-execution-version [conn execution-id version]
   (if (= :latest version)
-    (:version (record jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_executions WHERE id = ?"
+    (:version (record :resolve-execution-version jdbc/execute-one! conn ["SELECT MAX(version) as version FROM workflow_executions WHERE id = ?"
                                        execution-id]
                                  {:builder-fn rs/as-unqualified-maps}))
     version))
@@ -147,7 +147,7 @@
   #_(swap! debug conj [(:execution/id execution) (:execution/version execution)])
   (with-open [conn (jdbc/get-connection ds)]
     (try
-      (record jdbc/execute! conn ["INSERT INTO workflow_executions (
+      (record :save-execution* jdbc/execute! conn ["INSERT INTO workflow_executions (
       id,
       version,
       state_machine_id,
@@ -233,7 +233,7 @@
      (fn []
        (try
          (with-open [conn (jdbc/get-connection db-spec)]
-           (record jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?)"
+           (record :save-statem jdbc/execute! conn ["INSERT INTO workflow_statemachines (id, version, start_at, execution_mode, context, states) VALUES (?, ?, ?, ?, ?, ?)"
                                        (:state-machine/id state-machine)
                                        (:state-machine/version state-machine)
                                        (:state-machine/start-at state-machine)
@@ -342,7 +342,7 @@ ORDER BY e.enqueued_at %s;"
        (with-open [conn (jdbc/get-connection db-spec)]
          (let [tid (:task/id task)]
            (try
-             (record jdbc/execute! conn ["INSERT INTO workflow_scheduler_tasks (id, execution_id, start_after, encoded) VALUES (?, ?, ?, ?);"
+             (record :save-task jdbc/execute! conn ["INSERT INTO workflow_scheduler_tasks (id, execution_id, start_after, encoded) VALUES (?, ?, ?, ?);"
                                          tid
                                          (:task/execution-id task)
                                          (.getTime ^Date (:task/start-after task))
@@ -370,7 +370,7 @@ ORDER BY e.enqueued_at %s;"
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
          (try
-           (record jdbc/execute! conn ["UPDATE workflow_scheduler_tasks SET response = ? WHERE id = ? AND response IS NULL;"
+           (record :complete-task jdbc/execute! conn ["UPDATE workflow_scheduler_tasks SET response = ? WHERE id = ? AND response IS NULL;"
                                        (freeze reply)
                                        task-id])
            {:task/id task-id}
@@ -388,7 +388,7 @@ ORDER BY e.enqueued_at %s;"
      (fn []
        (with-open [conn (jdbc/get-connection db-spec)]
          (try
-           (record jdbc/execute! conn ["DELETE FROM workflow_scheduler_tasks WHERE id = ?" task-id])
+           (record :delete-task jdbc/execute! conn ["DELETE FROM workflow_scheduler_tasks WHERE id = ?" task-id])
            (catch clojure.lang.ExceptionInfo ei
              {:error (Throwable->map ei)})))))))
 
