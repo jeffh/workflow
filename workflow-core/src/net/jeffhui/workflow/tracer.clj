@@ -59,24 +59,27 @@
 (defn record-exception [^Span span ^Throwable t] (.recordException span t))
 
 (defmacro with-span
-  ([[span-sym start-span-args] body]
-   {:pre [span-sym start-span-args]}
-   `(with-span @*tracer* nil [~span-sym ~start-span-args] ~body))
-  ([parent [span-sym start-span-args] body]
-   {:pre [span-sym start-span-args]}
-   `(with-span @*tracer* ~parent [~span-sym ~start-span-args] ~body))
-  ([tracer parent [span-sym start-span-args] body]
-   {:pre [tracer span-sym start-span-args]}
-   `(let [parent# (or ~parent (Span/current))
-          ~span-sym (start-span ~tracer
-                                parent#
-                                ~@(if (vector? start-span-args)
-                                    start-span-args
-                                    [start-span-args]))]
-      (try
-        ~@body
-        (catch Throwable t#
-          (record-exception ~span-sym t#)
-          (throw t#))
-        (finally
-          (end-span ~span-sym))))))
+  ;; Usages:
+  ;;   (with-span [span [& span-args]]
+  ;;     ...)
+  ;;   (with-span tracer [span [& span-args]]
+  ;;     ...)
+  [& args]
+  (let [[tracer [span-sym start-span-args] body]
+        (if (vector? (first args))
+          [nil (first args) (rest args)]
+          [(first args) (second args) (rest (rest args))])]
+    (assert span-sym)
+    (assert start-span-args)
+    `(let [~span-sym (start-span (or ~tracer @*tracer*)
+                                 (Span/current)
+                                 ~@(if (vector? start-span-args)
+                                     start-span-args
+                                     [start-span-args]))]
+       (try
+         ~@body
+         (catch Throwable t#
+           (record-exception ~span-sym t#)
+           (throw t#))
+         (finally
+           (end-span ~span-sym))))))

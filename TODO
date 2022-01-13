@@ -1,5 +1,4 @@
 [ ] Features
-  [~] Manually stepping through an execution? -> Can be done by running core
   [ ] Canceling execution
   [ ] Streaming execution to another state machine
   [ ] Upgrading Executions to new State Machine versions

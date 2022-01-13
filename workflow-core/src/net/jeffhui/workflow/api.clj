@@ -79,9 +79,9 @@
   If version is `:latest`, then the persistence layer will return the state machine with the highest version.
   "
   [fx statem-id statem-version]
-  (tracer/with-span [sp "fetch-statem"])
-  (when-let [s (protocol/fetch-statem fx statem-id statem-version)]
-    (s/debug-assert-statem s)))
+  (tracer/with-span [sp "fetch-statem"]
+    (when-let [s (protocol/fetch-statem fx statem-id statem-version)]
+      (s/debug-assert-statem s))))
 
 (defn list-executions
   "Experimental: Returns a sequence of executions."
@@ -404,7 +404,7 @@
              :let [e (:execution mt)]
              :when e]
          (let [f (save-execution fx e opt)]
-           (deref r 1 ::timeout) ;; here to induce partial ordering
+           (deref f 1 ::timeout) ;; here to induce partial ordering
            f)))
       (save-execution fx (:execution result) opt))))
 
