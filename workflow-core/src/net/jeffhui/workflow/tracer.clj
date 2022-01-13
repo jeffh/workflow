@@ -10,7 +10,7 @@
 ;;;;;;;;;;;;;; Tap based tracing
 
 (defn reset-taps []
-  (swap! #'clojure.core/tapset empty))
+  (swap! @#'clojure.core/tapset empty))
 
 (defmacro with-tap [f & body]
   `(let [f# ~f]
