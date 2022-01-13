@@ -205,7 +205,6 @@
       (async/take! res prn)))
 
   (count @store)
-  
 
   out
 

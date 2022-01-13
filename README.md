@@ -93,6 +93,47 @@ terms of the Eclipse Public License 2.0 which is available at
 http://www.eclipse.org/legal/epl-2.0.
 
 
+# Observation
+
+## Taps
+
+Workflow emits values to clojure's tap system for repl debugging and tracing:
+Each namespace uses its own namespace to represent keys to be easier to filter:
+
+```clojure
+;; an example invocation by net.jeffhui.workflow.core namespace
+(tap> :net.jeffhui.workflow.core{:execution ..., :state-machine ..., :input ..., :type :next-execution})
+```
+
+These typically include execution information and/or exceptions. This can be
+useful to debug stales or executions locally.
+
+`::type` is always a key that corresponds to the function name that the tap invocation resides in
+
+A simple way to debug is to then add a tap before executing
+
+```clojure
+;; let store atom store the results of tap
+(def store (atom []))
+(def tapper #(swap! store conj %))
+(add-tap tapper)
+
+;; run workflow
+
+
+(count @store) ;; @store now contains the executions
+
+(remove-tap tapper) ;; disable tap
+```
+
+Of course, you can also choose to print to stdout instead.
+
+## Tracing
+
+Workflow is instrumented with [OpenTelemetry](https://opentelemetry.io/) to
+allow recording tracing of execution. You'll need to set up the Trace Providers
+to export this tracing information.
+
 # Development
 
 Running test:
