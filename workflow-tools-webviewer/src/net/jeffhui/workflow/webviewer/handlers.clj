@@ -23,17 +23,17 @@
 
 (defn default-layout [options {::r/keys [router match] :as req} {:keys [status data to-html]}]
   (condp = (get-accept req)
-    :json {:status (int status)
+    :json {:status  (int status)
            :headers {"Content-Type" "application/json"}
-           :body (json/write-value-as-string data)}
+           :body    (json/write-value-as-string data)}
 
-    :edn {:status (int status)
+    :edn {:status  (int status)
           :headers {"Content-Type" "application/edn"}
-          :body (pr-str data)}
+          :body    (pr-str data)}
 
-    :text {:status (int status)
+    :text {:status  (int status)
            :headers {"Content-Type" "text/plain"}
-           :body (with-out-str
+           :body    (with-out-str
                    (if (map? data)
                      (doseq [[f v] data]
                        (println (str f ":"))
@@ -46,8 +46,8 @@
                   [["Machines" ::list-machines]
                    ["Executions" ::list-executions]])]
       {:status (int status)
-       :body (html
-              [:html {:lang "en"}
+       :body   (html
+                [:html {:lang "en"}
                [:head
                 [:title "Workflow Webviewer"]
                 [:link {:href (r/match-by-name router ::asset)}]]
@@ -57,8 +57,8 @@
                  [:ul#main-nav
                   (for [[text id] nav]
                     [:li [:a.block
-                          {:id (str id)
-                           :href (r/match-by-name router id)
+                          {:id    (str id)
+                           :href  (r/match-by-name router id)
                            :class (when (= id (:name match))
                                     "selected")}
                           text]])]]
