@@ -55,5 +55,5 @@
                      (fn []
                        (let [statem (mem/make-statem-persistence)]
                          {:statem statem
-                          :execution (mem/make-execution-persistence statem)
-                          :scheduler (make-test-scheduler)}))))
+                          :execution (mem/make-execution-persistence)
+                          :scheduler (make-test-scheduler mem/make-scheduler-persistence)}))))

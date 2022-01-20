@@ -33,15 +33,23 @@
       (get-in s [state-machine-id version])))
   (save-statem [_ state-machine options]
     (let [{:state-machine/keys [id version]} state-machine]
-      (future (if (and id version (integer? version))
-                {:ok     true
-                 :value (get-in (swap! state assoc-in-if
-                                       [(:state-machine/id state-machine)
-                                        (:state-machine/version state-machine)]
-                                       nil?
-                                       state-machine)
-                                [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
-                {:ok false})))))
+      (future
+        (cond
+          (get-in @state [(:state-machine/id state-machine)
+                          (:state-machine/version state-machine)])
+          (throw (ex-info "duplicate state machine" (select-keys state-machine [:state-machine/id :state-machine/version])))
+
+          (and id version (integer? version))
+          {:ok     true
+           :value (get-in (swap! state assoc-in-if
+                                 [(:state-machine/id state-machine)
+                                  (:state-machine/version state-machine)]
+                                 nil?
+                                 state-machine)
+                          [(:state-machine/id state-machine) (:state-machine/version state-machine)])}
+
+          :else
+          {:ok false})))))
 
 (defn make-statem-persistence []
   (->StateMachinePersistence (atom {})))
