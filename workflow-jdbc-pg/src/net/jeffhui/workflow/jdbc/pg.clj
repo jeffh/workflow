@@ -217,7 +217,7 @@
             (if (= expected-unique (.getSQLState msg))
               {:ok    false
                :error (wf/make-error :execution/version-conflict :persistence/execution "failed to save execution"
-                                     {:throwable         ei
+                                     {:throwable         pe
                                       :execution/id      (:execution/id execution)
                                       :execution/version (:execution/version execution)})}
               (throw pe))
