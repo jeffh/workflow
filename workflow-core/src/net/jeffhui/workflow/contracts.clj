@@ -327,7 +327,7 @@
                                                 (recur (<!!-or-timeout queue timeout :timeout))))))
                       end            (System/nanoTime)
                       delta-ms       (double (/ (- end start) 1000000))]
-                  (is (>= delta-ms sleep-duration)
+                  (is (>= delta-ms (dec sleep-duration))
                       (format "execution is deferred by at least the given amount, expected %d" sleep-duration))))
               (testing "sleep execution later, expecting a response"
                 (let [sleep-duration (+ 100 (rand-int 900))
@@ -338,7 +338,7 @@
                       end            (System/nanoTime)
                       delta-ms       (double (/ (- end start) 1000000))]
                   (is (= {:test 6} output))
-                  (is (>= delta-ms sleep-duration)
+                  (is (>= delta-ms (dec sleep-duration))
                       (format "execution is deferred by at least the given amount, expected %d" sleep-duration)))))
             (testing "[exceptional cases]"
               (testing "sleeping in the past still runs"
