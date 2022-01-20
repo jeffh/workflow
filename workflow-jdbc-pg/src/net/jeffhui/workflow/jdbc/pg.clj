@@ -205,8 +205,10 @@
           (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
             (if (= expected-unique sql-state)
               {:ok    false
-               :error {:error     :version-conflict
-                       :throwable ei}}
+               :error (wf/make-error :execution/version-conflict :persistence/execution "failed to save execution"
+                                     {:throwable         ei
+                                      :execution/id      (:execution/id execution)
+                                      :execution/version (:execution/version execution)})}
               (throw ei))
             (throw ei))))
       (catch org.postgresql.util.PSQLException pe
@@ -214,8 +216,10 @@
           (if-let [msg (.getServerErrorMessage pe)]
             (if (= expected-unique (.getSQLState msg))
               {:ok    false
-               :error {:error     :version-conflict
-                       :throwable pe}}
+               :error (wf/make-error :execution/version-conflict :persistence/execution "failed to save execution"
+                                     {:throwable         ei
+                                      :execution/id      (:execution/id execution)
+                                      :execution/version (:execution/version execution)})}
               (throw pe))
             (throw pe)))))))
 
@@ -365,9 +369,9 @@ ORDER BY e.enqueued_at %s;"
                (let [expected-unique "23505"]
                  (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
                    (if (= expected-unique sql-state)
-                     {:error :version-conflict}
-                     {:error (Throwable->map ei)})
-                   {:error (Throwable->map ei)})))))))))
+                     {:error (wf/make-error :save-task/version-conflict :persistence/scheduler "failed to save task")}
+                     {:error (wf/make-error :save-task/exception :persistence/scheduler "failed to save task" {:error (Throwable->map ei)})})
+                   {:error (wf/make-error :save-task/exception :persistence/scheduler "failed to save task" {:error (Throwable->map ei)})})))))))))
   (runnable-tasks [_ now]
     (with-open [conn (jdbc/get-connection db-spec)]
       (into []
@@ -391,9 +395,9 @@ ORDER BY e.enqueued_at %s;"
              (let [expected-unique "23505"]
                (if-let [sql-state (:pg-sql-state-error (ex-data ei))]
                  (if (= expected-unique sql-state)
-                   {:error :version-conflict}
-                   {:error (Throwable->map ei)})
-                 {:error (Throwable->map ei)}))))))))
+                   {:error (wf/make-error :complete-task/version-conflict :persistence/scheduler "failed to complete task")}
+                   {:error (wf/make-error :complete-task/exception :persistence/scheduler "failed to complete task" {:error (Throwable->map ei)})})
+                 {:error (wf/make-error :complete-task/exception :persistence/scheduler "failed to complete task" {:error (Throwable->map ei)})}))))))))
   (delete-task [_ task-id]
     (.submit
      pool
@@ -403,7 +407,7 @@ ORDER BY e.enqueued_at %s;"
          (try
            (record :delete-task jdbc/execute! conn ["DELETE FROM workflow_scheduler_tasks WHERE id = ?" task-id])
            (catch clojure.lang.ExceptionInfo ei
-             {:error (Throwable->map ei)})))))))
+             {:error (wf/make-error :delete-task/exception :persistence/scheduler "failed to delete task" {:error (Throwable->map ei)})})))))))
 
 (defn make-scheduler-persistence [db-spec]
   (->SchedulerPersistence db-spec nil nil))

@@ -16,6 +16,7 @@
 
 (defrecord StateMachinePersistence [state]
   p/StateMachinePersistence
+  ;; TODO: needs contract
   (list-statem [_ {:keys [version limit offset]}]
     (let [s @state
           machines (mapcat vals s)]
@@ -47,6 +48,7 @@
 
 (defrecord ExecutionPersistence [state]
   p/ExecutionPersistence
+  ;; TODO: needs contract
   (list-executions [_ {:keys [limit offset]}]
     (let [s @state]
       (->>
@@ -196,6 +198,7 @@
     #_
     (do
       (def out (wf/start fx "prepare-cart" {:skus #{"A1" "B2"}})))
+
     (do
       (def out (wf/start fx "order" {::wf/io {"http.request.json" (fn [method uri res]
                                                                     {:status 200
@@ -246,6 +249,15 @@
                       (wf/executions-for-statem fx "order" {:version :latest}))))
 
   (wf/fetch-execution fx (:execution/id out) :latest)
+  (clojure.pprint/print-table
+   (map #(select-keys % [:execution/state
+                         :execution/state-machine-id
+                         :execution/pause-state
+                         :execution/comment
+                         :execution/input
+                         :execution/pending-effects
+                         :execution/completed-effects])
+        (wf/fetch-execution-history fx (:execution/id out))))
 
   (do
     (require 'clojure.inspector)
