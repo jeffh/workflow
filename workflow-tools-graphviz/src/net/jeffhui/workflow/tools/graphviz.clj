@@ -5,10 +5,20 @@
             [clojure.java.io :as io]
             [clojure.pprint :as pprint]))
 
+(def ^:dynamic *vertical?* false)
+
 (defn- str->ident [s]
   (if s
     (pr-str s)
     "\"\""))
+
+(defn- truncate [s]
+  (let [s   (str s)
+        max 30]
+    (if (> (count s) max)
+      (str (subs s 0 (min max (count s)))
+           " ...")
+      s)))
 
 (defn- get-edges [statem]
   (let [states (:state-machine/states statem)]
@@ -23,18 +33,18 @@
                     (let [invoke-id (cond
                                       (:state-machine invoke)
                                       (str (if (:async? invoke)
-                                             "start: "
-                                             "run: ")
+                                             "async-statem: "
+                                             "sync-statem: ")
                                            (pr-str (:state-machine invoke)) "")
 
                                       (:execution invoke)
                                       (str (if (:async? invoke)
-                                             "notify: "
-                                             "trigger: ")
+                                             "async-trigger: "
+                                             "sync-trigger: ")
                                            (pr-str (:execution invoke)))
 
                                       (:call invoke)
-                                      (str "call: " (pr-str (:call invoke))))]
+                                      (str "call: " (truncate (pr-str (:call invoke)))))]
                       [(format "  edge [color=%s]"
                                (cond
                                  (string? wh) "firebrick3"
@@ -44,7 +54,7 @@
                                (str->ident src)
                                (str->ident (or (:state action) invoke-id))
                                (str->ident
-                                (str (when wh (pr-str wh)))))
+                                (str (or id (when wh (pr-str wh))))))
                        (when-not (:state action)
                          (format "  %s [shape=component]" (str->ident invoke-id)))
                        (format "  %s -> %s"
@@ -83,14 +93,16 @@
                                  wh           "darkgreen"
                                  :else        "black"))
                        (if (= src target)
-                         (format "  %s:e -> %s:w [label=%s]"
+                         (format "  %s:%s -> %s:%s [label=%s]"
                                  (str->ident src)
+                                 (if *vertical?* "s" "e")
                                  (str->ident target)
-                                 (str->ident (str (when wh (pr-str wh)))))
+                                 (if *vertical?* "n" "w")
+                                 (str->ident (str (or id (when wh (pr-str wh))))))
                          (format "  %s -> %s [label=%s]"
                                  (str->ident src)
                                  (str->ident target)
-                                 (str->ident (str (when wh (pr-str wh))))))])))))))
+                                 (str->ident (str (or id (when wh (pr-str wh)))))))])))))))
 
 (defn statem->dot [statem]
   (let [edges     (get-edges statem)
@@ -99,8 +111,9 @@
                     (format "  %s [shape=octagon];" (pr-str src)))
         title     (str (:state-machine/id statem) "_v" (:state-machine/version statem))]
     (str "digraph " (str->ident title) "{\n"
-         "labelloc=t\n"
-         "rankdir=\"LR\"\n"
+         "labelloc=" (if *vertical?* "t" "l") "\n"
+         (when *vertical?* "nodesep=1;\n")
+         (when-not *vertical?* "rankdir=\"LR\"\n")
          (format "label=%s\n" (str->ident (str "State Machine: " title)))
          "\n"
          (string/join "\n" edges)
@@ -132,6 +145,8 @@
   (spit "test.dot" (statem->dot contracts/order-statem))
   (spit "test.dot" (statem->dot contracts/shipment-statem))
 
-  (statem->file contracts/order-statem :png "output.png")
+  (binding [*vertical?* true]
+    (statem->file contracts/order-statem :png "output.png"))
+  (statem->file contracts/shipment-statem :png "test.png")
 
   )
