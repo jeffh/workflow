@@ -871,3 +871,22 @@
            (tracer/record-exception sp t)
            (.printStackTrace t)))))))
 
+
+
+(defn child-execution-ids
+  "Helper function. Returns execution ids of just-created child executions.
+
+  No arguments returns the transducer function.
+
+  Example:
+
+    (distinct (keep child-execution-ids (fetch-execution-history fx my-execution-id)))
+  "
+  ([]
+   (comp
+    (map ::resume)
+    (filter (comp #{:execution/start} :op))
+    (map (comp :execution/id :return))))
+  ([execution]
+   (not-empty (sequence (child-execution-ids) (:execution/completed-effects execution)))))
+

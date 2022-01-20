@@ -259,6 +259,9 @@
                          :execution/completed-effects])
         (wf/fetch-execution-history fx (:execution/id out))))
 
+  (map (partial wf/fetch-execution-history fx)
+       (distinct (keep (comp first wf/child-execution-ids) (wf/fetch-execution-history fx (:execution/id out)))))
+
   (do
     (require 'clojure.inspector)
     (clojure.inspector/inspect-tree
