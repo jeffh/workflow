@@ -31,6 +31,12 @@
 (defn open [obj] (if (satisfies? Connection obj) (open* obj) obj))
 (defn close [obj] (if (satisfies? Connection obj) (close* obj) obj))
 
+(defprotocol ExceptionHandler
+  (report-error* [_ t] "Receives Throwable exceptions that workflow may produce internally. Useful to debug issues from production."))
+
+(defn report-error [handler ^Throwable t]
+  (when handler (report-error* handler t)))
+
 (defprotocol MachineInterpreter
   (evaluate-expr [_ expr io state input output]
     "Evaluates an expression and returns an action map for workflow to process.
@@ -180,7 +186,7 @@
 (defmethod io :default [name & _args]
   (throw (IllegalArgumentException. (format "io does not support '%s'" name))))
 
-(defrecord Effects [state-machine-persistence execution-persistence scheduler interp]
+(defrecord Effects [state-machine-persistence execution-persistence scheduler interp exception-handler]
   Connection
   (open* [this]
     (let [statem (open state-machine-persistence)
@@ -202,6 +208,8 @@
              :scheduler (close scheduler)
              :execution-persistence exec
              :state-machine-persistence statem)))
+  ExceptionHandler
+  (report-error* [this t] (report-error exception-handler t))
   StateMachinePersistence
   (list-statem [_ options] (list-statem state-machine-persistence options))
   (fetch-statem [_ state-machine-id version] (fetch-statem state-machine-persistence state-machine-id version))

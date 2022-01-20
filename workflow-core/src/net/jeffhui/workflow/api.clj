@@ -199,9 +199,9 @@
           (tap> {::type :save-execution ::execution execution ::options options ::result res})
           res)))))
 
-(defn effects [{:keys [statem execution scheduler interpreter]}]
+(defn effects [{:keys [statem execution scheduler interpreter exception-handler]}]
   {:pre [statem execution scheduler interpreter]}
-  (protocol/->Effects statem execution scheduler interpreter))
+  (protocol/->Effects statem execution scheduler interpreter exception-handler))
 
 (defn- verify-execution [e]
   (assert (or (not (contains? e :execution/state))
@@ -378,6 +378,7 @@
 (defn- record-exception [fx starting-execution e]
   (let [err          (Throwable->map e)
         max-attempts 3]
+    (protocol/report-error fx e)
     (loop [attempt   max-attempts
            execution starting-execution]
       (if (zero? attempt)
@@ -461,7 +462,7 @@
                                   :tx                @tx})))
                (recur (:value @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
                       nil)))))
-        (catch Exception e
+        (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
@@ -709,7 +710,7 @@
                (recur (do (deref tx 1000 ::timeout)
                           (:value @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
                       nil)))))
-        (catch Exception e
+        (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
@@ -753,7 +754,7 @@
                (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
                           next-execution)
                       nil)))))
-        (catch Exception e
+        (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
@@ -805,7 +806,7 @@
              (do
                (enqueue-execution fx (:execution/id execution) nil)
                next-execution))))
-        (catch Exception e
+        (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
           (record-exception fx @latest-execution e))))))
@@ -869,9 +870,8 @@
                (step fx state-machine execution input))))
          (catch Throwable t
            (tracer/record-exception sp t)
+           (protocol/report-error fx t)
            (.printStackTrace t)))))))
-
-
 
 (defn child-execution-ids
   "Helper function. Returns execution ids of just-created child executions.
