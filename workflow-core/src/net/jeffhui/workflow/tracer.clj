@@ -98,7 +98,7 @@
                                      start-span-args
                                      [`(Span/current) start-span-args]))
            scope# (.makeCurrent ~span-sym)]
-      (set-attr-str ~span-sym "ns" *ns*)
+      (set-attr-str ~span-sym "ns" ~*ns*)
       (set-attr-long ~span-sym "line" ~(:line md))
        (try
          ~@body

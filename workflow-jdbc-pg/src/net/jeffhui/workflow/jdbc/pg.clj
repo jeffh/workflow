@@ -20,7 +20,12 @@
 
 ;; NOTE(jeff): defined to provider easier debugging for serialization issues
 (defn- freeze [v]
-  (nippy/fast-freeze v))
+  (->> v
+       (walk/postwalk (fn [form]
+                        (cond
+                          (delay? form) (pr-str @form)
+                          :else form)))
+       nippy/fast-freeze))
 
 (defn- thaw [v]
   (nippy/fast-thaw v))
