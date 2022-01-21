@@ -27,39 +27,33 @@
 
 (defn- record
   ([trace-name f ds parameterized-query]
-   (let [sp (tracer/start-span tracer (tracer/current-span) "run-sql")]
-     (try
-       (tracer/set-attr-str sp "sql" (first parameterized-query))
-       (tap> {::type trace-name ::sql parameterized-query})
-       (f ds parameterized-query)
-       (catch org.postgresql.util.PSQLException pe
-         (tracer/record-exception sp pe)
-         (tap> {::type trace-name ::sql parameterized-query ::exception pe})
-         (let [msg (.getServerErrorMessage pe)]
-           (throw (ex-info "Failed to execute SQL"
-                           {:sql                (first parameterized-query)
-                            :values             (rest parameterized-query)
-                            :pg-sql-state-error (some-> msg (.getSQLState))}
-                           pe))))
-       (finally
-         (tracer/end-span sp)))))
+  (tracer/with-span [sp "run-sql"]
+    (tracer/set-attr-str sp "sql" (first parameterized-query))
+    (tap> {::type trace-name ::sql parameterized-query})
+    (f ds parameterized-query)
+    (catch org.postgresql.util.PSQLException pe
+      (tracer/record-exception sp pe)
+      (tap> {::type trace-name ::sql parameterized-query ::exception pe})
+      (let [msg (.getServerErrorMessage pe)]
+        (throw (ex-info "Failed to execute SQL"
+                        {:sql                (first parameterized-query)
+                         :values             (rest parameterized-query)
+                         :pg-sql-state-error (some-> msg (.getSQLState))}
+                        pe))))))
   ([trace-name f ds parameterized-query options]
-   (let [sp (tracer/start-span tracer (tracer/current-span) "run-sql")]
-     (try
-       (tracer/set-attr-str sp "sql" (first parameterized-query))
-       (tap> {::type trace-name ::sql parameterized-query})
-       (f ds parameterized-query options)
-       (catch org.postgresql.util.PSQLException pe
-         (tracer/record-exception sp pe)
-         (tap> {::type trace-name ::sql parameterized-query ::exception pe})
-         (let [msg (.getServerErrorMessage pe)]
-           (throw (ex-info "Failed to execute SQL"
-                           {:sql                (first parameterized-query)
-                            :values             (rest parameterized-query)
-                            :pg-sql-state-error (some-> msg (.getSQLState))}
-                           pe))))
-       (finally
-         (tracer/end-span sp))))))
+   (tracer/with-span [sp "run-sql"]
+     (tracer/set-attr-str sp "sql" (first parameterized-query))
+     (tap> {::type trace-name ::sql parameterized-query})
+     (f ds parameterized-query options)
+     (catch org.postgresql.util.PSQLException pe
+       (tracer/record-exception sp pe)
+       (tap> {::type trace-name ::sql parameterized-query ::exception pe})
+       (let [msg (.getServerErrorMessage pe)]
+         (throw (ex-info "Failed to execute SQL"
+                         {:sql                (first parameterized-query)
+                          :values             (rest parameterized-query)
+                          :pg-sql-state-error (some-> msg (.getSQLState))}
+                         pe)))))))
 
 (defn drop-tables!
   "Deletes all data. Please, I hope you know what you're doing."

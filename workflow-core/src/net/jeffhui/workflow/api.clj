@@ -5,6 +5,7 @@
             [net.jeffhui.workflow.tracer :as tracer]
             ;; for multimethod implementations
             net.jeffhui.workflow.io.http
+            [clojure.string :as string]
             [clojure.core.async :as async]
             [clojure.set :as set]
             [clojure.walk :as walk])
@@ -219,6 +220,10 @@
   :invoke :call actions.
 
   To extend io, please require protocol/io and add a multimethod.
+
+  io will always return a map that contains at least one key:
+
+    {:ok bool} -> which indicates if the io succeeded or failed
   "
   [op & args]
   (tracer/with-span [sp "io"]
@@ -232,7 +237,8 @@
               (apply res args)
               res))
           (apply protocol/io op args))
-        (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op))))))
+        (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))
+        (s/assert-errorable (format "(io %s ...) must return a map containing :error, but didn't" (pr-str op))))))
 
 (defn- no-io
   [op & args]
@@ -415,10 +421,11 @@
   (let [opt {:can-fail? (not stop?)}]
     (if (seq (:transitions result))
       (last
-       (for [mt (map meta (:transitions result))
-             :let [e (:execution mt)]
+       (for [t     (:transitions result)
+             :let  [action (:id t)
+                   e (:execution (meta t))]
              :when e]
-         (let [f (save-execution fx e opt)]
+         (let [f (save-execution fx (assoc e :execution/last-action action) opt)]
            (deref f 1 ::timeout) ;; here to induce partial ordering
            f)))
       (save-execution fx (:execution result) opt))))
@@ -444,24 +451,25 @@
       (try
         (timed-run
          timeout
-         (loop [execution starting-execution
-                input     input]
-           (let [result         (step-execution! cofx fx state-machine execution input)
-                 stop?          (core/result-stopped? result)
-                 next-execution (:execution result)
-                 _              (reset! latest-execution execution)
-                 tx             (save-transitions fx stop? result)
+         (tracer/with-span [sp [sp "timed-run"]]
+           (loop [execution starting-execution
+                  input     input]
+             (let [result         (step-execution! cofx fx state-machine execution input)
+                   stop?          (core/result-stopped? result)
+                   next-execution (:execution result)
+                   _              (reset! latest-execution execution)
+                   tx             (save-transitions fx stop? result)
                  ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
-                 ]
-             (if stop?
-               (if (:ok @tx)
-                 next-execution
-                 (throw (ex-info "Failed to save execution"
-                                 {:execution/id      (:execution/id execution)
-                                  :execution/version (:execution/version execution)
-                                  :tx                @tx})))
-               (recur (:value @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
-                      nil)))))
+                   ]
+               (if stop?
+                 (if (:ok @tx)
+                   next-execution
+                   (throw (ex-info "Failed to save execution"
+                                   {:execution/id      (:execution/id execution)
+                                    :execution/version (:execution/version execution)
+                                    :tx                @tx})))
+                 (recur (:value @(acquire-execution fx executor-name next-execution nil {:can-fail? true}))
+                        nil))))))
         (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
@@ -587,10 +595,9 @@
                                                               (.printStackTrace t))))
                                       :invoke/io        (let [{:keys [input expr]} args]
                                                           (try
-                                                            (let [result (protocol/eval-action expr fx io (or (:execution/ctx execution)
-                                                                                                              (:execution/memory execution))
-                                                                                               input)]
-                                                              {:value result})
+                                                            (protocol/eval-action expr fx io (or (:execution/ctx execution)
+                                                                                                 (:execution/memory execution))
+                                                                                  input)
                                                             (catch Throwable t
                                                               {:error (make-error :invoke/io
                                                                                   :io
@@ -633,7 +640,8 @@
       ;; execution wants to be notified about success/failure
       (:execution/completed-effects execution)
       (let [effect-result                                  (first (:execution/completed-effects execution))
-            {:keys [effects transitions error] :as result} (core/step-execution cofx state-machine (assoc execution :execution/error nil)
+            {:keys [effects transitions error] :as result} (core/step-execution cofx state-machine
+                                                                                (assoc execution :execution/error nil)
                                                                                 (set/rename-keys effect-result {::action ::core/action
                                                                                                                 ::resume ::core/resume}))
             now                                            (now!)
@@ -648,7 +656,7 @@
         (core/->Result (cond-> next-execution
                          stop? (assoc :execution/finished-at now))
                        (:execution/pending-effects next-execution)
-                       nil
+                       transitions
                        (:execution/error next-execution)))
 
       ;; advance possibly an automated state machine advance
@@ -668,7 +676,7 @@
         (core/->Result (cond-> next-execution
                          stop? (assoc :execution/finished-at now))
                        (:execution/pending-effects next-execution)
-                       nil
+                       transitions
                        (:execution/error next-execution))))))
 
 (defn- run-linear-execution
@@ -690,26 +698,27 @@
       (try
         (timed-run
          timeout
-         (loop [execution starting-execution
-                input     input]
-           (let [result         (step-execution! cofx fx state-machine execution input)
-                 stop?          (core/result-stopped? result)
-                 next-execution (:execution result)
-                 _              (reset! latest-execution execution)
-                 tx             (save-transitions fx stop? result)
+         (tracer/with-span [sp [sp "timed-run"]]
+           (loop [execution starting-execution
+                  input     input]
+             (let [result         (step-execution! cofx fx state-machine execution input)
+                   stop?          (core/result-stopped? result)
+                   next-execution (:execution result)
+                   _              (reset! latest-execution execution)
+                   tx             (save-transitions fx stop? result)
                  ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
-                 ]
-             (if stop?
-               (if (:ok @tx)
-                 next-execution
-                 (throw (ex-info "Failed to save execution"
-                                 {:execution/id      (:execution/id execution)
-                                  :execution/version (:execution/version execution)
-                                  :tx                (dissoc @tx :exception)}
-                                 (:exception @tx))))
-               (recur (do (deref tx 1000 ::timeout)
-                          (:value @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
-                      nil)))))
+                   ]
+               (if stop?
+                 (if (:ok @tx)
+                   next-execution
+                   (throw (ex-info "Failed to save execution"
+                                   {:execution/id      (:execution/id execution)
+                                    :execution/version (:execution/version execution)
+                                    :tx                (dissoc @tx :exception)}
+                                   (:exception @tx))))
+                 (recur (do (deref tx 1000 ::timeout)
+                            (:value @(acquire-execution fx "linear" next-execution nil {:can-fail? true})))
+                        nil))))))
         (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
@@ -734,26 +743,27 @@
       (try
         (timed-run
          timeout
-         (loop [execution starting-execution
-                input     input]
-           (let [result         (step-execution! cofx fx state-machine execution input)
-                 stop?          (core/result-stopped? result)
-                 next-execution (:execution result)
-                 _              (reset! latest-execution execution)
-                 tx             (save-transitions fx stop? result)
+         (tracer/with-span [sp [sp "timed-run"]]
+           (loop [execution starting-execution
+                  input     input]
+             (let [result         (step-execution! cofx fx state-machine execution input)
+                   stop?          (core/result-stopped? result)
+                   next-execution (:execution result)
+                   _              (reset! latest-execution execution)
+                   tx             (save-transitions fx stop? result)
                  ;; tx             (save-execution fx next-execution {:can-fail? (not stop?)})
-                 ]
-             (if stop?
-               (if (:ok @tx)
-                 next-execution
-                 (throw (ex-info "Failed to save execution"
-                                 {:execution/id      (:execution/id execution)
-                                  :execution/version (:execution/version execution)
-                                  :tx                (dissoc @tx :exception)}
-                                 (:exception tx))))
-               (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
-                          next-execution)
-                      nil)))))
+                   ]
+               (if stop?
+                 (if (:ok @tx)
+                   next-execution
+                   (throw (ex-info "Failed to save execution"
+                                   {:execution/id      (:execution/id execution)
+                                    :execution/version (:execution/version execution)
+                                    :tx                (dissoc @tx :exception)}
+                                   (:exception tx))))
+                 (recur (do (acquire-execution fx "linear-inconsistent" next-execution nil {:can-fail? true})
+                            next-execution)
+                        nil))))))
         (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
@@ -788,24 +798,25 @@
       (try
         (timed-run
          timeout
-         (let [result         (step-execution! cofx fx state-machine execution input)
-               stop?          (core/result-stopped? result)
-               next-execution (:execution result)
-               _              (reset! latest-execution execution)
-               tx             (save-transitions fx stop? result)
+         (tracer/with-span [sp [sp "timed-run"]]
+           (let [result         (step-execution! cofx fx state-machine execution input)
+                 stop?          (core/result-stopped? result)
+                 next-execution (:execution result)
+                 _              (reset! latest-execution execution)
+                 tx             (save-transitions fx stop? result)
                ;; tx             @(save-execution fx next-execution {:can-fail? (not stop?)})
-               ]
-           (if stop?
-             (if (:ok @tx)
-               next-execution
-               (throw (ex-info "Failed to save execution"
-                               {:execution/id      (:execution/id execution)
-                                :execution/version (:execution/version execution)
-                                :tx                (dissoc @tx :exception)}
-                               (:exception @tx))))
-             (do
-               (enqueue-execution fx (:execution/id execution) nil)
-               next-execution))))
+                 ]
+             (if stop?
+               (if (:ok @tx)
+                 next-execution
+                 (throw (ex-info "Failed to save execution"
+                                 {:execution/id      (:execution/id execution)
+                                  :execution/version (:execution/version execution)
+                                  :tx                (dissoc @tx :exception)}
+                                 (:exception @tx))))
+               (do
+                 (enqueue-execution fx (:execution/id execution) nil)
+                 next-execution)))))
         (catch Throwable e
           (tap> {::type :execution-exception ::execution @latest-execution ::exception e})
           (tracer/record-exception sp e)
@@ -847,27 +858,34 @@
   ([fx] (create-execution-handler fx nil))
   ([fx {:keys [executor-name]}]
    (fn handler [eid input]
-     (tracer/with-span [sp "created execution-handler"]
+     (tracer/with-span [sp "execution-handler.handle"]
+       (tracer/set-attr-str sp "execution-id" eid)
+       (tracer/set-attr-str sp "input" (pr-str input))
        (try
          (let [executor-name (or executor-name (.getName (Thread/currentThread)))
                [execution input]
                (loop [attempts 1]
                  (when (< attempts 30)
+                   (tracer/add-event sp "attempt")
                    (when-let [e (fetch-execution fx eid :latest)]
                      (when-not (and (= "finished" (:execution/pause-state e))
                                     (empty? (:execution/pending-effects e))
                                     (empty? (:execution/completed-effects e)))
-                       ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
+                         ;;  (prn "ACQUIRE" (:execution/id e) (:execution/version e) (Thread/currentThread))
                        (when-let [res (acquire-execution fx executor-name e input {:can-fail? false})]
                          (if-let [e (:value (deref res 10000 nil))]
                            [e input]
                            (do
-                             (Thread/sleep (* attempts attempts))
+                             (tracer/with-span [sp [sp "sleep"]]
+                               (let [ms (* attempts attempts)]
+                                 (tracer/set-attr-long sp "ms" ms)
+                                 (Thread/sleep ms)))
                              (recur (inc attempts)))))))))]
            (when execution
              (let [state-machine  (fetch-statem fx (:execution/state-machine-id execution) (:execution/state-machine-version execution))
                    {:keys [step]} (executor (:execution/mode execution))]
-               (step fx state-machine execution input))))
+               (tracer/with-span [sp [sp "executor"]]
+                 (step fx state-machine execution input)))))
          (catch Throwable t
            (tracer/record-exception sp t)
            (protocol/report-error fx t)
@@ -890,3 +908,137 @@
   ([execution]
    (not-empty (sequence (child-execution-ids) (:execution/completed-effects execution)))))
 
+(defn explain-execution-history
+  "Experimental. Returns a more human-friendly output of what happened in an execution.
+
+  Returns an informal sequence of:
+
+   (with-meta
+     [execution-version event & data]
+     {:description       \"some basic description of the event\"
+      :ctx-changes       {key [old-value '=> new-value]}
+      :execution-changes {key [old-value '=> new-value]}
+      :execution         ...})
+  "
+  [fx execution-id]
+  (let [history       (fetch-execution-history fx execution-id)
+        ;; statem        (fetch-statem fx
+        ;;                             (:execution/state-machine-id (first history))
+        ;;                             (:execution/state-machine-version (first history)))
+        resume-id->fx (atom {})
+        changes       (fn [m1 m2 no-changes]
+                        (or
+                         (not-empty
+                          (into {}
+                                (keep identity
+                                      (for [k    (into (set (keys m1)) (keys m2))
+                                            :let [v1 (get m1 k ::missing)
+                                                  v2 (get m2 k ::missing)]]
+                                        (when (not= v1 v2)
+                                          [k [(if (= v1 ::missing)
+                                                'missing-key
+                                                v1) '=>
+                                              (if (= v2 ::missing)
+                                                'missing-key
+                                                v2)]])))))
+                         no-changes))]
+    (doall
+     (mapcat
+      identity
+      (for [[e prev] (map vector history (into [nil] history))
+            :let     [evt (fn [desc & values]
+                            (with-meta (into [(:execution/version e)] (keep identity values))
+                              {:description       desc
+                               :ctx-changes       (changes (:execution/ctx prev) (:execution/ctx e) nil)
+                               :execution-changes (changes prev e nil)
+                               :execution         e}))]]
+        (cond
+          (nil? prev) [(evt "execution was created from a state machine"
+                            :created (select-keys e [:execution/state-machine-id
+                                                     :execution/state-machine-version
+                                                     :execution/id
+                                                     :execution/input]))]
+
+          (:execution/pending-effects e) (concat (when (not= (:execution/state prev) (:execution/state e))
+                                                   [(evt "execution completed an action that changed the execution state, prior to effects completed"
+                                                         :change-state {:to   (:execution/state e)
+                                                                        :from (:execution/state prev)})])
+                                                 (mapv #(let [resume-id (ffirst (:resumers (:execution/pause-memory e)))
+                                                              form      (condp = (:op %1)
+                                                                          :invoke/io        (with-meta
+                                                                                              (let [expr (:expr (:args %1))]
+                                                                                                (if (> (count expr) 2)
+                                                                                                  (into '(...) (reverse (take 2 (:expr (:args %1)))))
+                                                                                                  expr))
+                                                                                              {:expr (:expr (:args %1))})
+                                                                          :execution/start  (with-meta
+                                                                                              `(~'start
+                                                                                                ~(:state-machine-id (:args %1))
+                                                                                                ...)
+                                                                                              {:state-machine-id (:state-machine-id (:args %1))
+                                                                                               :execution-id     (:execution-id (:args %1))
+                                                                                               :input            (:input (:args %1))})
+                                                                          :execution/return (if-let [id (:to (:args %1))]
+                                                                                              [:return (:result (:args %1))]
+                                                                                              [:return])
+                                                                          [(:op %1) (:args %1)])]
+                                                          (swap! resume-id->fx assoc resume-id form)
+                                                          (evt (condp = (:op %1)
+                                                                 :invoke/io     "action requests an io side effect to occur and receive the result"
+                                                                 :invoke/start  "action requests an io side effect to occur and receive the result"
+                                                                 :invoke/return "action requests to notify the completion of this execution to another execution"
+                                                                 "action requests a side effect to occur")
+                                                               :requested-effect form))
+                                                       (:execution/pending-effects e)))
+
+          (> (count (:execution/completed-effects e))
+             (count (:execution/completed-effects prev)))
+          [(#(let [r (::resume %)]
+               (evt 
+                (if (:ok (:return r))
+                  "a side effect has completed successfully and is pending to be processed by the state machine execution"
+                  "a side effect has failed to complete, and is pending to be processed by the state machine execution")
+                (if (:ok (:return r))
+                  :effect-succeeded
+                  :effect-failed)
+                (get @resume-id->fx (:id r) r)
+                (:return r)))
+            (first (:execution/completed-effects e)))]
+          ;; This technically shouldn't be any different from normal state transition below
+          ;; (< (count (:execution/completed-effects e))
+          ;;    (count (:execution/completed-effects prev)))
+          ;; [(#(let [r (::resume %)]
+          ;;      (evt (if (:ok (:return r))
+          ;;             :react-effect-succeeded
+          ;;             :react-effect-failed)
+          ;;           (get @resume-id->fx (:id r) r)
+          ;;           (:return r)))
+          ;;   (first (:execution/completed-effects e)))]
+
+          (not= (:execution/state prev) (:execution/state e))
+          [(evt "the action/transition being followed"
+                :action (:execution/last-action e))
+           (evt "a pure state transition of the state machine from one state to another"
+                :change-state {:to     (:execution/state e)
+                               :from   (:execution/state prev)})]
+
+          (and (:action-id (:execution/pause-memory e))
+               (not= "wait-fx" (:execution/pause-state prev)))
+          [(evt (if (#{"wait-fx"} (:execution/pause-state prev))
+                  "the action/transition being followed to process the completed side effects"
+                  "the action/transition being followed that has side effects to enqueue")
+                (if (#{"wait-fx"} (:execution/pause-state prev))
+                  :resuming-action
+                  :action)
+                (:action-id (:execution/pause-memory e)))]
+
+          (clojure.string/includes? (:execution/comment e) "Resuming") nil
+
+          (= "finished" (:execution/pause-state e))
+          [(evt "the execution has completed"
+                :finished {:state          (:execution/state e)
+                           :duration       [(/ (- (:execution/finished-at e) (:execution/started-at e)) 1e9) :ms]
+                           :estimated-size [(count (pr-str history)) :bytes]})]
+
+          :else [(evt "an unrecognized pattern of state machine execution"
+                      :unknown e)]))))))

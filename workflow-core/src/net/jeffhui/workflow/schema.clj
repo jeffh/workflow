@@ -11,11 +11,14 @@
   [:schema {:registry {::std-transition [:and
                                          [:or
                                           [:map [:state StateId]]
-                                          [:map [:context Code]]]
+                                          [:map
+                                           [:ctx Code] ;; :context is deprecated, use :ctx instead
+                                           [:context {:optional true} Code]]]
                                          [:map
                                           [:id StateId]
                                           [:when {:optional true} Code]
                                           [:state {:optional true} StateId]
+                                          [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                           [:context {:optional true} Code]]]
                        ::if-transition [:map
                                         [:id StateId]
@@ -27,6 +30,7 @@
                        ::wait-transition [:map
                                           [:id StateId]
                                           [:state {:optional true} StateId]
+                                          [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                           [:context {:optional true} Code]
                                           [:when {:optional true} Code]
                                           [:wait-for
@@ -34,14 +38,17 @@
                                             [:map
                                              [:seconds integer?]
                                              [:state {:optional true} StateId]
+                                             [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                              [:context {:optional true} Code]]
                                             [:map
                                              [:timestamp integer?]
                                              [:state {:optional true} StateId]
+                                             [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                              [:context {:optional true} Code]]]]]
                        ::invoke-transition [:map
                                             [:id StateId]
                                             [:state {:optional true} StateId]
+                                            [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                             [:context {:optional true} Code]
                                             [:when {:optional true} Code]
                                             [:invoke
@@ -51,16 +58,19 @@
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
                                                [:state StateId]
+                                               [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                                [:context {:optional true} Code]]
                                               [:map ;; Trigger Execution
                                                [:execution [:tuple Code Code]]
                                                [:async? {:optional true} boolean?]
                                                [:input {:optional true} Code]
                                                [:state StateId]
+                                               [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                                [:context {:optional true} Code]]
                                               [:map ;; IO call
                                                [:call Code]
                                                [:state StateId]
+                                               [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
                                                [:context {:optional true} Code]]]]]
                        ::transition [:or
                                      [:ref ::std-transition]
@@ -120,7 +130,8 @@
    [:state-machine/id string?]
    [:state-machine/version integer?]
    [:state-machine/execution-mode string?]
-   [:state-machine/context {:optional true} Code]
+   [:state-machine/ctx {:optional true} Code]
+   [:state-machine/context {:optional true} Code]  ;; :context is deprecated, use :ctx instead
    [:state-machine/io {:optional true} [:map-of any? Code]]
    [:state-machine/states [:map-of StateId State]]])
 
@@ -261,3 +272,8 @@
     (every? edn? f)
 
     :else false))
+
+(defn assert-errorable [m msg]
+  (when-not (contains? m :error)
+    (throw (AssertionError. (str msg))))
+  m)
