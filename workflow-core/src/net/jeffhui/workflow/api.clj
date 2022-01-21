@@ -238,6 +238,7 @@
               res))
           (apply protocol/io op args))
         (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))
+        (s/assert-map (format "(io %s ...) must return a map, but didn't" (pr-str op)))
         (s/assert-errorable (format "(io %s ...) must return a map containing :error, but didn't" (pr-str op))))))
 
 (defn- no-io
@@ -994,7 +995,7 @@
           (> (count (:execution/completed-effects e))
              (count (:execution/completed-effects prev)))
           [(#(let [r (::resume %)]
-               (evt 
+               (evt
                 (if (:ok (:return r))
                   "a side effect has completed successfully and is pending to be processed by the state machine execution"
                   "a side effect has failed to complete, and is pending to be processed by the state machine execution")

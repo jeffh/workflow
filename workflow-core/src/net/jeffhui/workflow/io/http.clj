@@ -90,7 +90,7 @@
                                 :bytes (HttpResponse$BodyHandlers/ofByteArray)
                                 (HttpResponse$BodyHandlers/ofString))))
                 (then response->map))]
-    (.join res)))
+    {:error nil :value (.join res)}))
 
 (defmethod protocol/io "http.request.json" http-request-json [_ method url options]
   (let [req (->request method url options)
@@ -101,4 +101,4 @@
                                 (HttpResponse$BodyHandlers/ofString))))
                 (then response->map)
                 (then #(update % :body json/read-value json/keyword-keys-object-mapper)))]
-    (.join res)))
+    {:error nil :value (.join res)}))

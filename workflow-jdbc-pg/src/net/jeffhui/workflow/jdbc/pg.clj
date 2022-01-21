@@ -19,6 +19,7 @@
 (def ^:private tracer (tracer/get-tracer "net.jeffhui.workflow.jdbc.pg"))
 
 ;; NOTE(jeff): defined to provider easier debugging for serialization issues
+;; TODO(jeff): this postwalk should be moved into sci interpreter implementation
 (defn- freeze [v]
   (->> v
        (walk/postwalk (fn [form]
