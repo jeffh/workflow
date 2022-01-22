@@ -275,7 +275,8 @@
 
 (defn assert-map [m msg]
   (when-not (map? m)
-    (throw (AssertionError. (str msg)))) m)
+    (throw (AssertionError. (str msg))))
+  m)
 
 (defn assert-errorable [m msg]
   (when-not (contains? m :error)

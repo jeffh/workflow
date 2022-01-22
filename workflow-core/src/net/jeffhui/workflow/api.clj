@@ -1035,6 +1035,9 @@
 
           (clojure.string/includes? (:execution/comment e) "Resuming") nil
 
+          (:execution/error e)
+          [(evt "the execution has errored" :error (:execution/error e))]
+
           (= "finished" (:execution/pause-state e))
           [(evt "the execution has completed"
                 :finished {:state          (:execution/state e)
