@@ -183,7 +183,7 @@
     (let [errs (s/err-for-statem statem)]
       (if errs
         (do
-          (tracer/set-attr-str sp "error" (pr-str errs))
+          (tracer/add-event sp "error" (tracer/attrs "error" (pr-str errs)))
           (future {:ok    false
                    :error errs}))
         (protocol/save-statem persistence statem nil)))))
@@ -191,6 +191,10 @@
 ;; (def save-execution protocol/save-execution) ;; This isn't common enough to put in this namespace
 (defn- save-execution [persistence execution options]
   (tracer/with-span [sp "save-execution"]
+    (tracer/set-attr-str sp "execution-id" (:execution/id execution))
+    (tracer/set-attr-str sp "execution-version" (:execution/version execution))
+    (tracer/set-attr-str sp "state-machine-id" (:execution/state-machine-id execution))
+    (tracer/set-attr-str sp "state-machine-version" (:execution/state-machine-version execution))
     (let [res (protocol/save-execution persistence (s/debug-assert-execution execution) options)]
       (if (future? res)
         (future (let [ret @res]
@@ -227,23 +231,31 @@
   "
   [op & args]
   (tracer/with-span [sp "io"]
-    (tracer/set-attr-str sp "op" (pr-str op))
-    (tap> {::type :invoke-io ::io op :args args})
-    (-> (if-let [code (get (:execution/io *execution*) op)]
-          (let [res (eval-action code *fx* io (or (:execution/ctx *execution*)
-                                                  (:execution/memory *execution*))
-                                 nil)]
-            (if (fn? res)
-              (apply res args)
-              res))
-          (apply protocol/io op args))
-        (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))
-        (s/assert-map (format "(io %s ...) must return a map, but didn't" (pr-str op)))
-        (s/assert-errorable (format "(io %s ...) must return a map containing :error, but didn't" (pr-str op))))))
+    (tracer/set-attr-str sp "op" (str op))
+    (tracer/with-span [sp [sp (str "io::" (pr-str op))]]
+      (tracer/add-event sp "invoke" (tracer/attrs "io.args" (str args)
+                                                  "io.op" (pr-str op)))
+
+      (tap> {::type :invoke-io ::io op :args args})
+      (let [result
+            (-> (if-let [code (get (:execution/io *execution*) op)]
+                  (let [res (eval-action code *fx* io (or (:execution/ctx *execution*)
+                                                          (:execution/memory *execution*))
+                                         nil)]
+                    (if (fn? res)
+                      (apply res args)
+                      res))
+                  (apply protocol/io op args))
+                (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))
+                (s/assert-map (format "(io %s ...) must return a map, but didn't" (pr-str op)))
+                (s/assert-errorable (format "(io %s ...) must return a map containing :error, but didn't" (pr-str op))))]
+        (tracer/add-event sp "return" (tracer/attrs "io.return" (str result)))
+        result))))
 
 (defn- no-io
   [op & args]
-  (throw (ex-info "io is not allowed in this location" {:op op :args args})))
+  (tracer/with-span [sp "io::no-op"]
+    (throw (ex-info "io is not allowed in this location" {:op op :args args}))))
 
 (defn empty-execution
   "Returns a map that represents an empty execution"
@@ -301,7 +313,8 @@
          (let [now                   (now!)
                execution             (empty-execution {:execution-id    execution-id
                                                        :state-machine   state-machine
-                                                       :initial-context (eval-action (:state-machine/context state-machine)
+                                                       :initial-context (eval-action (or (:state-machine/ctx state-machine)
+                                                                                         (:state-machine/context state-machine))
                                                                                      fx
                                                                                      no-io
                                                                                      nil
@@ -592,13 +605,16 @@
                                                               (enqueue-execution fx execution-id {::resume {:id     complete-id
                                                                                                             :return return-value}
                                                                                                   ::reply? false}))
+                                                            {:error nil}
                                                             (catch Throwable t
                                                               (.printStackTrace t))))
                                       :invoke/io        (let [{:keys [input expr]} args]
                                                           (try
-                                                            (protocol/eval-action expr fx io (or (:execution/ctx execution)
-                                                                                                 (:execution/memory execution))
-                                                                                  input)
+                                                            (-> (protocol/eval-action expr fx io (or (:execution/ctx execution)
+                                                                                                     (:execution/memory execution))
+                                                                                      input)
+                                                                (s/assert-map "expected io to return a map with an :error key")
+                                                                (s/assert-errorable "expected io call to return a map with an :error key"))
                                                             (catch Throwable t
                                                               {:error (make-error :invoke/io
                                                                                   :io

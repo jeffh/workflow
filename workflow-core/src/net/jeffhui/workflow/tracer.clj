@@ -57,27 +57,44 @@
 (defn end-span [^Span span]
   (.end span))
 
-(defmacro ^Span add-event
-  ([span name] `(.addEvent ^Span ~span (str ~name)))
-  ([span name attributes]
-   `(.addEvent ^Span ~span (str ~name)
-               (Attributes/of
-                ~@(mapcat
-                   identity
-                   (for [[k v] attributes]
-                     (cond
-                       (instance? AttributeKey k) [k v]
-                       (= str (first v)) [(AttributeKey/stringKey k) v]
-                       (= double (first v)) [(AttributeKey/doubleKey k) v]
-                       (= boolean (first v)) [(AttributeKey/booleanKey k) v]
-                       (#{long int} (first v)) [(AttributeKey/longKey k) v]
-                       :else (throw (ex-info "Unsupported attribute value type" {:type (type v)
-                                                                                 :value v})))))))))
+(defn- ^AttributeKey attr-key [k v]
+  (cond
+    (instance? AttributeKey k) k
+    (string? v)                (AttributeKey/stringKey (name k))
+    (double? v)                (AttributeKey/doubleKey (name k))
+    (boolean? v)               (AttributeKey/booleanKey (name k))
+    (integer? v)               (AttributeKey/longKey (name k))
+    :else                      (throw (ex-info "Unsupported attribute value type" {:type  (type v)
+                                                                                   :value v}))))
+
+(defn ^Attributes attrs
+  ([key value] (Attributes/of (attr-key key value) value))
+  ([k1 v1 k2 v2] (Attributes/of (attr-key k1 v1) v2
+                                (attr-key k2 v2) v2))
+  ([k1 v1 k2 v2 k3 v3] (Attributes/of (attr-key k1 v1) v2
+                                      (attr-key k2 v2) v2
+                                      (attr-key k3 v3) v3))
+  ([k1 v1 k2 v2 k3 v3 k4 v4] (Attributes/of (attr-key k1 v1) v2
+                                            (attr-key k2 v2) v2
+                                            (attr-key k3 v3) v3
+                                            (attr-key k4 v4) v4))
+  ([k1 v1 k2 v2 k3 v3 k4 v4 k5 v5] (Attributes/of (attr-key k1 v1) v2
+                                                  (attr-key k2 v2) v2
+                                                  (attr-key k3 v3) v3
+                                                  (attr-key k4 v4) v4
+                                                  (attr-key k5 v5) v5)))
+
+(defn ^Span add-event
+  ([span n] (.addEvent ^Span span (str n)))
+  ([span n ^Attributes attributes] (.addEvent ^Span span (str n) attributes))
+  ([span n ^Attributes attributes inst] (.addEvent ^Span span (str n) attributes inst)))
 (defn set-attr-bool ^Span [^Span span ^String key value] (.setAttribute span key (boolean value)) span)
 (defn set-attr-double ^Span [^Span span ^String key value] (.setAttribute span key (double (or value 0))) span)
 (defn set-attr-long ^Span [^Span span ^String key value] (.setAttribute span key (long (or value 0))) span)
 (defn set-attr-str ^Span [^Span span ^String key value] (.setAttribute span key (str value)) span)
-(defn record-exception [^Span span ^Throwable t] (.recordException span t))
+(defn record-exception [^Span span ^Throwable t]
+  (set-attr-str span "error.name" (str t))
+  (.recordException span t))
 
 (defmacro with-span
   ;; Usages:

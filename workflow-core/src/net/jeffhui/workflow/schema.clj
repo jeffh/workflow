@@ -11,9 +11,9 @@
   [:schema {:registry {::std-transition [:and
                                          [:or
                                           [:map [:state StateId]]
-                                          [:map
-                                           [:ctx Code] ;; :context is deprecated, use :ctx instead
-                                           [:context {:optional true} Code]]]
+                                          [:or
+                                           [:map [:ctx Code]]
+                                           [:map [:context Code]]]] ;; :context is deprecated, use :ctx instead
                                          [:map
                                           [:id StateId]
                                           [:when {:optional true} Code]

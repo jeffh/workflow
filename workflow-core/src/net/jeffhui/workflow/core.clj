@@ -259,8 +259,8 @@
                     {:keys [then]}                              (get resumers rid)
 
                     next-state    (or (:state then) state)
-                    next-data     (if (:context then)
-                                    (eval-expr! (:context then) data original-input (:return resume))
+                    next-data     (if (or (:ctx then) (:context then))
+                                    (eval-expr! (or (:ctx then) (:context then)) data original-input (:return resume))
                                     data)
                     next-resumers (not-empty (dissoc (:resumers (:execution/pause-memory execution)) rid))]
                 #_(debug-print "RESUME" (:execution/state-machine-id execution) resume)
@@ -305,8 +305,8 @@
                                  eid              (random-execution-id!)
                                  rid              (random-resume-id!)
                                  next-state       (or (:state action) state)
-                                 next-data        (if (:context action)
-                                                    (eval-expr! (:context action) data input)
+                                 next-data        (if (or (:ctx action) (:context action))
+                                                    (eval-expr! (or (:ctx action) (:context action)) data input)
                                                     data)
                                  state-machine-id (eval-expr! (:state-machine invoke) data input)
                                  statem-input     (merge (:input invoke)
@@ -318,7 +318,7 @@
                                                                         :execution-id     eid
                                                                         :state-machine-id state-machine-id
                                                                         :original-input   input
-                                                                        :resumers         {rid {:then (select-keys invoke [:state :context])}}}
+                                                                        :resumers         {rid {:then (select-keys invoke [:state :ctx :context])}}}
                                                :execution/state        next-state
                                                :execution/ctx          next-data})
                                        [{:op           :execution/start
@@ -337,15 +337,15 @@
                                  eid        (random-execution-id!)
                                  exec-input (:input invoke)
                                  next-state (or (:state invoke) state)
-                                 next-data  (if (:context action)
-                                              (eval-expr! (:context action) data input)
+                                 next-data  (if (or (:ctx action) (:context action))
+                                              (eval-expr! (or (:ctx action) (:context action)) data input)
                                               data)]
                              (->Result (merge (next-ver execution)
                                               {:execution/pause-state  "wait-fx"
                                                :execution/pause-memory {:action-id      aid
                                                                         :execution-id   eid
                                                                         :original-input input
-                                                                        :resumers       {rid {:then (select-keys invoke [:state :context])}}}
+                                                                        :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}
                                                :execution/state        next-state
                                                :execution/ctx          next-data})
                                        [{:op           :execution/step
@@ -364,7 +364,7 @@
                                               {:execution/pause-state  "wait-fx"
                                                :execution/pause-memory {:action-id      (:id action)
                                                                         :original-input input
-                                                                        :resumers       {rid {:then (select-keys invoke [:state :context])}}}})
+                                                                        :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}})
                                        [{:op           :invoke/io
                                          :args         {:input input
                                                         :expr  effect}
@@ -381,8 +381,8 @@
                         (let [{:keys [seconds timestamp] :as wait-for} (:wait-for action)
                               resume-id                                (random-resume-id!)
                               next-state                               (or (:state action) state)
-                              next-data                                (if (:context action)
-                                                                         (eval-expr! (:context action) data input)
+                              next-data                                (if (or (:ctx action) (:context action))
+                                                                         (eval-expr! (or (:ctx action) (:context action)) data input)
                                                                          data)]
                           (cond
                             seconds
@@ -390,7 +390,7 @@
                                              {:execution/pause-state  "wait-fx"
                                               :execution/pause-memory {:action-id      (:id action)
                                                                        :original-input input
-                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}
+                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
                                               :execution/state        next-state
                                               :execution/ctx          next-data
                                               :execution/input        input})
@@ -405,7 +405,7 @@
                                              {:execution/pause-state  "wait-fx"
                                               :execution/pause-memory {:action-id      (:id action)
                                                                        :original-input input
-                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :context])}}}
+                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
                                               :execution/state        next-state
                                               :execution/ctx          next-data
                                               :execution/input        input})
@@ -429,8 +429,8 @@
                         (let [condition  (eval-expr! (:if action) data input)
                               clause     (if condition (:then condition) (:else condition))
                               next-state (or (:state clause) state)
-                              next-data  (if (:context clause)
-                                           (eval-expr! (:context clause) data input)
+                              next-data  (if (or (:ctx clause) (:context clause))
+                                           (eval-expr! (or (:ctx clause) (:context clause)) data input)
                                            data)]
                           (->Result (merge (next-ver execution)
                                            {:execution/pause-state  (ready-or-await-pause-state states next-state)
@@ -442,10 +442,10 @@
                                     [{:id (:id action)}]
                                     nil)))
 
-                       (or (:state action) (:context action))
+                       (or (:state action) (:ctx action) (:context action))
                        (let [next-state (or (:state action) state)
-                             next-data  (if (:context action)
-                                          (eval-expr! (:context action) data input)
+                             next-data  (if (or (:ctx action) (:context action))
+                                          (eval-expr! (or (:ctx action) (:context action)) data input)
                                           data)]
                          (->Result (merge (next-ver execution)
                                           {:execution/pause-state  (ready-or-await-pause-state states next-state)

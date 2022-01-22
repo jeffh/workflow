@@ -1,10 +1,7 @@
 (ns net.jeffhui.workflow.interpreters
   (:require [net.jeffhui.workflow.protocol :as p]
             [net.jeffhui.workflow.tracer :as tracer]
-            [clojure.string :as string]
-            [clojure.edn :as edn]
-            [sci.core :as sci]
-            [jsonista.core :as json]))
+            [sci.core :as sci]))
 
 
 (def ^:private options
@@ -14,7 +11,9 @@
 (defn eval-action [edn-expr io context input output]
   (let [expr (pr-str edn-expr)]
     (tracer/with-span [sp "sci-eval"]
-      (tracer/set-attr-str sp "expr" expr)
+      (tracer/add-event sp "eval" (tracer/attrs "expr" expr
+                                                "*input*" (pr-str input)
+                                                "*output*" (pr-str output)))
       (try
         (sci/eval-string expr
                          (assoc options :bindings
@@ -36,7 +35,9 @@
 
 (defn clj-eval-action [edn-expr io context input output]
   (tracer/with-span [sp "clj-eval"]
-    (tracer/set-attr-str sp "expr" (pr-str edn-expr))
+    (tracer/add-event sp "eval" (tracer/attrs "expr" (pr-str edn-expr)
+                                              "*input*" (pr-str input)
+                                              "*output*" (pr-str output)))
     (try
       (eval `(let [~'io      ~io
                    ~'ctx     ~context
