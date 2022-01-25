@@ -71,7 +71,17 @@
                                                [:call Code]
                                                [:state StateId]
                                                [:ctx {:optional true} Code] ;; :context is deprecated, use :ctx instead
-                                               [:context {:optional true} Code]]]]]
+                                               [:context {:optional true} Code]]
+                                              [:map ;; IO v2 call
+                                               [:io [:vector Code]]
+                                               [:success
+                                                [:map
+                                                 [:state StateId]
+                                                 [:ctx {:optional true} Code]]]
+                                               [:failure
+                                                [:map
+                                                 [:state StateId]
+                                                 [:ctx {:optional true} Code]]]]]]]
                        ::transition [:or
                                      [:ref ::std-transition]
                                      [:ref ::if-transition]
@@ -240,9 +250,9 @@
 
 
 (declare edn?)
-(defn assert-edn [v msg]
+(defn assert-edn [v msg & values]
   (when-not (edn? v)
-    (throw (AssertionError. msg)))
+    (throw (AssertionError. (apply format msg values))))
   v)
 
 (defn- edn? [f]
@@ -273,12 +283,12 @@
 
     :else false))
 
-(defn assert-map [m msg]
+(defn assert-map [m msg & values]
   (when-not (map? m)
-    (throw (AssertionError. (str msg))))
+    (throw (AssertionError. (apply format msg values))))
   m)
 
-(defn assert-errorable [m msg]
+(defn assert-errorable [m msg & values]
   (when-not (contains? m :error)
-    (throw (AssertionError. (str msg))))
+    (throw (AssertionError. (apply format msg values))))
   m)

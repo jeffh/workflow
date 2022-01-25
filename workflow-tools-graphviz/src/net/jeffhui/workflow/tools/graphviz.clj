@@ -43,23 +43,45 @@
                                              "sync-trigger: ")
                                            (pr-str (:execution invoke)))
 
+                                      (:io invoke)
+                                      (str "io: " (truncate (string/join " " (map pr-str (:io invoke)))))
+
                                       (:call invoke)
                                       (str "call: " (truncate (pr-str (:call invoke)))))]
-                      [(format "  edge [color=%s]"
-                               (cond
-                                 (string? wh) "firebrick3"
-                                 wh           "darkgreen"
-                                 :else        "black"))
-                       (format "  %s -> %s [label=%s]"
-                               (str->ident src)
-                               (str->ident (or (:state action) invoke-id))
-                               (str->ident
-                                (str (or id (when wh (pr-str wh))))))
-                       (when-not (:state action)
-                         (format "  %s [shape=component]" (str->ident invoke-id)))
-                       (format "  %s -> %s"
-                               (str->ident (or (:state action) invoke-id))
-                               (str->ident (:state invoke)))])
+                      (if (:io invoke)
+                        [(format "  edge [color=%s]"
+                                 (cond
+                                   (string? wh) "firebrick3"
+                                   wh           "darkgreen"
+                                   :else        "black"))
+                         (format "  %s -> %s [label=%s]"
+                                 (str->ident src)
+                                 (str->ident (or (:state action) invoke-id))
+                                 (str->ident
+                                  (str (or id (when wh (pr-str wh))))))
+                         (when-not (:state action)
+                           (format "  %s [shape=component]" (str->ident invoke-id)))
+                         (format "  %s -> %s [label=success,style=dashed]"
+                                 (str->ident (or (:state action) invoke-id))
+                                 (str->ident (:state (:success invoke))))
+                         (format "  %s -> %s [label=failure,style=dashed]"
+                                 (str->ident (or (:state action) invoke-id))
+                                 (str->ident (:state (:failure invoke))))]
+                        [(format "  edge [color=%s]"
+                                 (cond
+                                   (string? wh) "firebrick3"
+                                   wh           "darkgreen"
+                                   :else        "black"))
+                         (format "  %s -> %s [label=%s]"
+                                 (str->ident src)
+                                 (str->ident (or (:state action) invoke-id))
+                                 (str->ident
+                                  (str (or id (when wh (pr-str wh))))))
+                         (when-not (:state action)
+                           (format "  %s [shape=component]" (str->ident invoke-id)))
+                         (format "  %s -> %s [label=complete,style=dashed]"
+                                 (str->ident (or (:state action) invoke-id))
+                                 (str->ident (:state invoke)))]))
 
                     wait-for
                     [(format "  edge [color=%s]"
@@ -120,7 +142,7 @@
          "\n"
          (string/join "\n" terminals)
          "\n"
-         (format "  %s [shape=box];\n" (:state-machine/start-at statem))
+         (format "  %s [shape=box];\n" (pr-str (:state-machine/start-at statem)))
          "\n}")))
 
 (defn dot->stream [dot format]

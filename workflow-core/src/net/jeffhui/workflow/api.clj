@@ -246,9 +246,9 @@
                       (apply res args)
                       res))
                   (apply protocol/io op args))
-                (s/assert-edn (format "(io %s ...) must return edn, but didn't" (pr-str op)))
-                (s/assert-map (format "(io %s ...) must return a map, but didn't" (pr-str op)))
-                (s/assert-errorable (format "(io %s ...) must return a map containing :error, but didn't" (pr-str op))))]
+                (s/assert-edn "(io %s ...) must return edn, but didn't" (pr-str op))
+                (s/assert-map "(io %s ...) must return a map, but didn't" (pr-str op))
+                (s/assert-errorable "(io %s ...) must return a map containing :error, but didn't" (pr-str op)))]
         (tracer/add-event sp "return" (tracer/attrs "io.return" (str result)))
         result))))
 
@@ -613,15 +613,16 @@
                                                             (-> (protocol/eval-action expr fx io (or (:execution/ctx execution)
                                                                                                      (:execution/memory execution))
                                                                                       input)
-                                                                (s/assert-map "expected io to return a map with an :error key")
-                                                                (s/assert-errorable "expected io call to return a map with an :error key"))
+                                                                (s/assert-map "expected :invoke :call to return a map with an :error key: (code: %s)" (pr-str expr))
+                                                                (s/assert-errorable "expected :invoke :call to return a map with an :error key (code: %s)" (pr-str expr)))
                                                             (catch Throwable t
                                                               {:error (make-error :invoke/io
                                                                                   :io
-                                                                                  "io invocation threw exception"
-                                                                                  {:input     input
-                                                                                   :expr      expr
-                                                                                   :throwable (throwable->map t)})})))
+                                                                                  (format ":invoke :call invocation throw exception: %s: %s" (str t) (.getMessage t))
+                                                                                  {:execution-state (:execution/state execution)
+                                                                                   :input           input
+                                                                                   :expr            expr
+                                                                                   :throwable       (throwable->map t)})})))
                                       :sleep/seconds    (let [{:keys [seconds]} args]
                                                           (protocol/sleep fx seconds (:execution/id execution)
                                                                           {::resume {:id     complete-ref

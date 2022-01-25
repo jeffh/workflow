@@ -357,6 +357,26 @@
                                        [{:id (:id action)}]
                                        nil))
 
+                           (:io invoke) ;; v2 of :call
+                           (let [effect (:io invoke)
+                                 rid    (random-resume-id!)]
+                             (->Result (merge (next-ver execution)
+                                              {:execution/pause-state  "wait-fx"
+                                               :execution/pause-memory {:action-id      (:id action)
+                                                                        :original-input input
+                                                                        :resumers       {rid {:then {:state (list 'if '(:ok *output*)
+                                                                                                                  (:state (:success invoke))
+                                                                                                                  (:state (:failure invoke)))
+                                                                                                     :ctx   (list 'if '(:ok *output*)
+                                                                                                                  (or (:ctx (:success invoke)) '*ctx*)
+                                                                                                                  (or (:ctx (:failure invoke)) '*ctx*))}}}}})
+                                       [{:op           :invoke/io
+                                         :args         {:input input
+                                                        :expr  (apply list 'io effect)}
+                                         :complete-ref rid}]
+                                       [{:id (:id action)}]
+                                       nil))
+
                            (:call invoke)
                            (let [effect (:call invoke)
                                  rid    (random-resume-id!)]
