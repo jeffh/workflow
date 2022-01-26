@@ -938,129 +938,143 @@
       :ctx-changes       {key [old-value '=> new-value]}
       :execution-changes {key [old-value '=> new-value]}
       :execution         ...})
+
+  Options:
+
+    :recursive? boolean - if true, also provides execution history to all children in metadata (default: true)
   "
-  [fx execution-id]
-  (let [history       (fetch-execution-history fx execution-id)
-        ;; statem        (fetch-statem fx
-        ;;                             (:execution/state-machine-id (first history))
-        ;;                             (:execution/state-machine-version (first history)))
-        resume-id->fx (atom {})
-        changes       (fn [m1 m2 no-changes]
-                        (or
-                         (not-empty
-                          (into {}
-                                (keep identity
-                                      (for [k    (into (set (keys m1)) (keys m2))
-                                            :let [v1 (get m1 k ::missing)
-                                                  v2 (get m2 k ::missing)]]
-                                        (when (not= v1 v2)
-                                          [k [(if (= v1 ::missing)
-                                                'missing-key
-                                                v1) '=>
-                                              (if (= v2 ::missing)
-                                                'missing-key
-                                                v2)]])))))
-                         no-changes))]
-    (doall
-     (mapcat
-      identity
-      (for [[e prev] (map vector history (into [nil] history))
-            :let     [evt (fn [desc & values]
-                            (with-meta (into [(:execution/version e)] (keep identity values))
-                              {:description       desc
-                               :ctx-changes       (changes (:execution/ctx prev) (:execution/ctx e) nil)
-                               :execution-changes (changes prev e nil)
-                               :execution         e}))]]
-        (cond
-          (nil? prev) [(evt "execution was created from a state machine"
-                            :created (select-keys e [:execution/state-machine-id
-                                                     :execution/state-machine-version
-                                                     :execution/id
-                                                     :execution/input]))]
+  ([fx execution-id] (explain-execution-history fx execution-id nil))
+  ([fx execution-id {:keys [recursive?] :or {recursive? true} :as options}]
+   (let [history       (fetch-execution-history fx execution-id)
+         ;; statem        (fetch-statem fx
+         ;;                             (:execution/state-machine-id (first history))
+         ;;                             (:execution/state-machine-version (first history)))
+         resume-id->fx (atom {})
+         changes       (fn [m1 m2 no-changes]
+                         (or
+                          (not-empty
+                           (into {}
+                                 (keep identity
+                                       (for [k    (into (set (keys m1)) (keys m2))
+                                             :let [v1 (get m1 k ::missing)
+                                                   v2 (get m2 k ::missing)]]
+                                         (when (not= v1 v2)
+                                           [k [(if (= v1 ::missing)
+                                                 'missing-key
+                                                 v1) '=>
+                                               (if (= v2 ::missing)
+                                                 'missing-key
+                                                 v2)]])))))
+                          no-changes))]
+     (doall
+      (mapcat
+       identity
+       (for [[e prev] (map vector history (into [nil] history))
+             :let     [evt (fn [desc & values]
+                             (with-meta (into [(:execution/version e)] (keep identity values))
+                               {:description       desc
+                                :ctx-changes       (changes (:execution/ctx prev) (:execution/ctx e) nil)
+                                :execution-changes (changes prev e nil)
+                                :execution         e}))]]
+         (cond
+           (nil? prev) [(evt "execution was created from a state machine"
+                             :created (select-keys e [:execution/state-machine-id
+                                                      :execution/state-machine-version
+                                                      :execution/id
+                                                      :execution/input]))]
 
-          (:execution/pending-effects e) (concat (when (not= (:execution/state prev) (:execution/state e))
-                                                   [(evt "execution completed an action that changed the execution state, prior to effects completed"
-                                                         :change-state {:to   (:execution/state e)
-                                                                        :from (:execution/state prev)})])
-                                                 (mapv #(let [resume-id (ffirst (:resumers (:execution/pause-memory e)))
-                                                              form      (condp = (:op %1)
-                                                                          :invoke/io        (with-meta
-                                                                                              (let [expr (:expr (:args %1))]
-                                                                                                (if (> (count expr) 2)
-                                                                                                  (into '(...) (reverse (take 2 (:expr (:args %1)))))
-                                                                                                  expr))
-                                                                                              {:expr (:expr (:args %1))})
-                                                                          :execution/start  (with-meta
-                                                                                              `(~'start
-                                                                                                ~(:state-machine-id (:args %1))
-                                                                                                ...)
-                                                                                              {:state-machine-id (:state-machine-id (:args %1))
-                                                                                               :execution-id     (:execution-id (:args %1))
-                                                                                               :input            (:input (:args %1))})
-                                                                          :execution/return (if-let [id (:to (:args %1))]
-                                                                                              [:return (:result (:args %1))]
-                                                                                              [:return])
-                                                                          [(:op %1) (:args %1)])]
-                                                          (swap! resume-id->fx assoc resume-id form)
-                                                          (evt (condp = (:op %1)
-                                                                 :invoke/io     "action requests an io side effect to occur and receive the result"
-                                                                 :invoke/start  "action requests an io side effect to occur and receive the result"
-                                                                 :invoke/return "action requests to notify the completion of this execution to another execution"
-                                                                 "action requests a side effect to occur")
-                                                               :requested-effect form))
-                                                       (:execution/pending-effects e)))
+           (:execution/pending-effects e) (concat (when (not= (:execution/state prev) (:execution/state e))
+                                                    [(evt "execution completed an action that changed the execution state, prior to effects completed"
+                                                          :change-state {:to   (:execution/state e)
+                                                                         :from (:execution/state prev)})])
+                                                  (mapv #(let [resume-id (ffirst (:resumers (:execution/pause-memory e)))
+                                                               form      (condp = (:op %1)
+                                                                           :invoke/io        (with-meta
+                                                                                               (let [expr (:expr (:args %1))]
+                                                                                                 (if (> (count expr) 2)
+                                                                                                   (into '(...) (reverse (take 2 (:expr (:args %1)))))
+                                                                                                   expr))
+                                                                                               {:expr (:expr (:args %1))})
+                                                                           :execution/start  (with-meta
+                                                                                               `(~'start
+                                                                                                 ~(:state-machine-id (:args %1))
+                                                                                                 ...)
+                                                                                               (merge
+                                                                                                {:state-machine-id (:state-machine-id (:args %1))
+                                                                                                 :execution-id     (:execution-id (:args %1))
+                                                                                                 :input            (:input (:args %1))}
+                                                                                                (when recursive?
+                                                                                                  {:history (explain-execution-history fx (:execution-id (:args %1)) options)})))
+                                                                           :execution/return (if-let [id (:to (:args %1))]
+                                                                                               [:return (:result (:args %1))]
+                                                                                               [:return])
+                                                                           [(:op %1) (:args %1)])]
+                                                           (swap! resume-id->fx assoc resume-id form)
+                                                           (vary-meta
+                                                             (evt (condp = (:op %1)
+                                                                    :invoke/io     "action requests an io side effect to occur and receive the result"
+                                                                    :invoke/start  "action requests an io side effect to occur and receive the result"
+                                                                    :invoke/return "action requests to notify the completion of this execution to another execution"
+                                                                    "action requests a side effect to occur")
+                                                                  :requested-effect form)
+                                                             merge (meta form)))
+                                                        (:execution/pending-effects e)))
 
-          (> (count (:execution/completed-effects e))
-             (count (:execution/completed-effects prev)))
-          [(#(let [r (::resume %)]
-               (evt
-                (if (:ok (:return r))
-                  "a side effect has completed successfully and is pending to be processed by the state machine execution"
-                  "a side effect has failed to complete, and is pending to be processed by the state machine execution")
-                (if (:ok (:return r))
-                  :effect-succeeded
-                  :effect-failed)
-                (get @resume-id->fx (:id r) r)
-                (:return r)))
-            (first (:execution/completed-effects e)))]
-          ;; This technically shouldn't be any different from normal state transition below
-          ;; (< (count (:execution/completed-effects e))
-          ;;    (count (:execution/completed-effects prev)))
-          ;; [(#(let [r (::resume %)]
-          ;;      (evt (if (:ok (:return r))
-          ;;             :react-effect-succeeded
-          ;;             :react-effect-failed)
-          ;;           (get @resume-id->fx (:id r) r)
-          ;;           (:return r)))
-          ;;   (first (:execution/completed-effects e)))]
+           (> (count (:execution/completed-effects e))
+              (count (:execution/completed-effects prev)))
+           [(#(let [r (::resume %)]
+                (evt
+                 (if (:ok (:return r))
+                   "a side effect has completed successfully and is pending to be processed by the state machine execution"
+                   "a side effect has failed to complete, and is pending to be processed by the state machine execution")
+                 (if (:ok (:return r))
+                   :effect-succeeded
+                   :effect-failed)
+                 (get @resume-id->fx (:id r) r)
+                 (:return r)))
+             (first (:execution/completed-effects e)))]
+           ;; This technically shouldn't be any different from normal state transition below
+           ;; (< (count (:execution/completed-effects e))
+           ;;    (count (:execution/completed-effects prev)))
+           ;; [(#(let [r (::resume %)]
+           ;;      (evt (if (:ok (:return r))
+           ;;             :react-effect-succeeded
+           ;;             :react-effect-failed)
+           ;;           (get @resume-id->fx (:id r) r)
+           ;;           (:return r)))
+           ;;   (first (:execution/completed-effects e)))]
 
-          (not= (:execution/state prev) (:execution/state e))
-          [(evt "the action/transition being followed"
-                :action (:execution/last-action e))
-           (evt "a pure state transition of the state machine from one state to another"
-                :change-state {:to     (:execution/state e)
-                               :from   (:execution/state prev)})]
+           (not= (:execution/state prev) (:execution/state e))
+           [(evt "the action/transition being followed"
+                 :action (:execution/last-action e))
+            (evt "a pure state transition of the state machine from one state to another"
+                 :change-state {:to   (:execution/state e)
+                                :from (:execution/state prev)})]
 
-          (and (:action-id (:execution/pause-memory e))
-               (not= "wait-fx" (:execution/pause-state prev)))
-          [(evt (if (#{"wait-fx"} (:execution/pause-state prev))
-                  "the action/transition being followed to process the completed side effects"
-                  "the action/transition being followed that has side effects to enqueue")
-                (if (#{"wait-fx"} (:execution/pause-state prev))
-                  :resuming-action
-                  :action)
-                (:action-id (:execution/pause-memory e)))]
+           (and (:action-id (:execution/pause-memory e))
+                (not= "wait-fx" (:execution/pause-state prev)))
+           [(evt (if (#{"wait-fx"} (:execution/pause-state prev))
+                   "the action/transition being followed to process the completed side effects"
+                   "the action/transition being followed that has side effects to enqueue")
+                 (if (#{"wait-fx"} (:execution/pause-state prev))
+                   :resuming-action
+                   :action)
+                 (:action-id (:execution/pause-memory e)))]
 
-          (clojure.string/includes? (:execution/comment e) "Resuming") nil
+           (clojure.string/includes? (:execution/comment e) "Resuming") nil
 
-          (:execution/error e)
-          [(evt "the execution has errored" :error (:execution/error e))]
+           (:execution/error e)
+           [(evt "the execution has errored" :error (:execution/error e))]
 
-          (= "finished" (:execution/pause-state e))
-          [(evt "the execution has completed"
-                :finished {:state          (:execution/state e)
-                           :duration       [(/ (- (:execution/finished-at e) (:execution/started-at e)) 1e9) :ms]
-                           :estimated-size [(count (pr-str history)) :bytes]})]
+           (= "wait-fx" (:execution/pause-state e))
+           [(evt "waiting for completion of effect"
+                 :waiting-for-effect)]
 
-          :else [(evt "an unrecognized pattern of state machine execution"
-                      :unknown e)]))))))
+           (= "finished" (:execution/pause-state e))
+           [(evt "the execution has completed"
+                 :finished {:state          (:execution/state e)
+                            :duration       [(/ (- (:execution/finished-at e) (:execution/started-at e)) 1e9) :ms]
+                            :estimated-size [(count (pr-str history)) :bytes]})]
+
+           :else [(evt "an unrecognized pattern of state machine execution"
+                       :unknown e)])))))))
