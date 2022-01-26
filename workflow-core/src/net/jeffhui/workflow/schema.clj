@@ -160,7 +160,7 @@
                                       (-> act :invoke :success :state) [:invoke :success :state]
                                       (-> act :invoke :failure :state) [:invoke :fialure :state]))
                               (into [goto-state]))
-                          "is not a known state"))))))
+                          "is not a state defined in the state machine"))))))
 
 (def State
   [:or
