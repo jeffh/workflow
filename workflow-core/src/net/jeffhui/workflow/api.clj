@@ -577,14 +577,15 @@
 
                                                              {execution-id :execution/id, :keys [ok execution error]}
                                                              (start fx state-machine-id execution-id input)]
-                                                         (merge
-                                                          {:error            (if ok nil
-                                                                                 (or error
-                                                                                     (make-error :execution/start :io "failed to start execution")))
-                                                           :async?           async?
-                                                           :state-machine/id state-machine-id
-                                                           :execution/id     execution-id}
-                                                          (when execution {:execution execution})))
+                                                         (when async?
+                                                           (merge
+                                                            {:error            (if ok nil
+                                                                                   (or error
+                                                                                       (make-error :execution/start :io "failed to start execution")))
+                                                             :async?           async?
+                                                             :state-machine/id state-machine-id
+                                                             :execution/id     execution-id}
+                                                            (when execution {:execution execution}))))
                                       :execution/step (let [{:keys [execution-id action input async?]}
                                                             args
 
