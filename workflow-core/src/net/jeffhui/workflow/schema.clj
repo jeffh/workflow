@@ -118,6 +118,50 @@
                   (frequencies (map key value)))]
       {key f})))
 
+(defn- actions-refer-to-states []
+  (fn [states]
+    (let [allowed-states (set (keys states))
+          actions (mapcat :actions (vals states))]
+      (->> actions
+           (mapcat (fn [act]
+                     [(:state act)
+                      (-> act :wait-for :state)
+                      (-> act :then :state)
+                      (-> act :else :state)
+                      (-> act :invoke :state)
+                      (-> act :invoke :success :state)
+                      (-> act :invoke :failure :state)]))
+           (remove nil?)
+           (every? allowed-states)))))
+
+(defn- actions-refer-to-states-error []
+  (fn [{states :value :as error} _]
+    (let [allowed-states (set (keys states))]
+      (apply merge
+              (for [[state-id state] states
+                    act (:actions state)
+                    goto-state (->> [(:state act)
+                                     (-> act :wait-for :state)
+                                     (-> act :then :state)
+                                     (-> act :else :state)
+                                     (-> act :invoke :state)
+                                     (-> act :invoke :success :state)
+                                     (-> act :invoke :failure :state)]
+                                    (remove nil?)
+                                    (remove allowed-states))]
+                (assoc-in nil
+                          (-> [state-id (:id act)]
+                              (into (cond
+                                      (:state act) [:state]
+                                      (-> act :wait-for :state) [:wait-for :state]
+                                      (-> act :then :state) [:then :state]
+                                      (-> act :else :state) [:else :state]
+                                      (-> act :invoke :state) [:invoke :state]
+                                      (-> act :invoke :success :state) [:invoke :success :state]
+                                      (-> act :invoke :failure :state) [:invoke :fialure :state]))
+                              (into [goto-state]))
+                          "is not a known state"))))))
+
 (def State
   [:or
    [:map [:return Code]]
@@ -143,7 +187,9 @@
    [:state-machine/ctx {:optional true} Code]
    [:state-machine/context {:optional true} Code]  ;; :context is deprecated, use :ctx instead
    [:state-machine/io {:optional true} [:map-of any? Code]]
-   [:state-machine/states [:map-of StateId State]]])
+   [:state-machine/states
+    [:and [:map-of StateId State]
+     [:fn {:error/fn (actions-refer-to-states-error)} (actions-refer-to-states)]]]])
 
 (def Time pos-int?)
 
