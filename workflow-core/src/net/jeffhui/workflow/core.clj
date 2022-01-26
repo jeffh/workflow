@@ -153,6 +153,7 @@
   (boolean
    (let [state-node (get statem-states state)]
      (and state-node (some (comp string? :when) (:actions state-node))))))
+
 (defn- ready-or-await-pause-state [statem-states state]
   (if (requires-trigger? statem-states state)
     "await-input"
@@ -214,243 +215,268 @@
          actions     (:actions state-node)
          data        (or (:execution/ctx execution)
                          (:execution/memory execution))]
-     (assert-arg state "Execution state cannot be nil: %s" (pr-str execution))
-     (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
-                                                                                      :possible-states (keys states)}))
      (tap> {::execution execution ::state-machine state-machine ::input input ::type :next-execution})
      #_(debug-print "STEP" (:execution/state-machine-id execution) (:execution/id execution) input)
      (vary-meta
-      (if (contains? state-node :return)
-         (if (= "finished" (:execution/pause-state execution))
-           (->Result execution nil nil nil)
-           (let [return-value (eval-expr! (:return state-node) data input)]
-             (->Result (assoc (next-ver execution) :execution/pause-state "finished")
-                       [{:op   :execution/return
-                         :args {:result return-value
-                                :to     (when-let [return-to (:execution/return-to execution)]
-                                          [return-to])}}]
-                       [{:id "finish" :finished true}]
-                       nil)))
-         (if (= "wait-fx" (:execution/pause-state execution))
-           (cond
-             (not resume)
-             (->Result execution nil nil
-                       #:error{:rejected? true
-                               :code      :no-resume
-                               :reason    "Expect a resume action"
-                               :input     input})
+      (try
+        (assert-arg state "Execution state cannot be nil: %s" (pr-str execution))
+        (assert-arg state-node "Execution state not found in state machine: %s" (pr-str {:expected-state  state
+                                                                                         :possible-states (keys states)}))
+        (if (contains? state-node :return)
+          (if (= "finished" (:execution/pause-state execution))
+            (->Result execution nil nil nil)
+            (let [return-value (eval-expr! (:return state-node) data input)]
+              (->Result (assoc (next-ver execution) :execution/pause-state "finished")
+                        [{:op   :execution/return
+                          :args {:result return-value
+                                 :to     (when-let [return-to (:execution/return-to execution)]
+                                           [return-to])}}]
+                        [{:id "finish" :finished true}]
+                        nil)))
+          (if (= "wait-fx" (:execution/pause-state execution))
+            (cond
+              (not resume)
+              (->Result execution nil nil
+                        #:error{:rejected? true
+                                :code      :no-resume
+                                :reason    "Expect a resume action"
+                                :input     input})
 
-             (nil? (contains? (:resumers (:execution/pause-memory execution)) (:id resume)))
-             (->Result execution nil nil
-                       #:error{:rejected? true
-                               :code      :invalid-resume-id
-                               :reason    "Resuming execution requires a resume id"
-                               :input     input})
+              (nil? (contains? (:resumers (:execution/pause-memory execution)) (:id resume)))
+              (->Result execution nil nil
+                        #:error{:rejected? true
+                                :code      :invalid-resume-id
+                                :reason    "Resuming execution requires a resume id"
+                                :input     input})
 
-             :else
-             (try?
-              execution
-              (merge {:id      (:action-id (:execution/pause-memory execution))
-                      :resume? true}
-                     (get (:resumers (:execution/pause-memory execution)) (:id resume)))
-              (let [rid (:id resume)
+              :else
+              (try?
+               execution
+               (merge {:id      (:action-id (:execution/pause-memory execution))
+                       :resume? true}
+                      (get (:resumers (:execution/pause-memory execution)) (:id resume)))
+               (let [rid (:id resume)
 
-                    {:keys [action-id original-input resumers]} (:execution/pause-memory execution)
-                    {:keys [then]}                              (get resumers rid)
+                     {:keys [action-id original-input resumers]} (:execution/pause-memory execution)
+                     {:keys [then]}                              (get resumers rid)
 
-                    next-state    (or (:state then) state)
-                    next-data     (if (or (:ctx then) (:context then))
-                                    (eval-expr! (or (:ctx then) (:context then)) data original-input (:return resume))
-                                    data)
-                    next-resumers (not-empty (dissoc (:resumers (:execution/pause-memory execution)) rid))]
-                #_(debug-print "RESUME" (:execution/state-machine-id execution) resume)
-                (->Result (merge (next-ver execution)
-                                 {:execution/state next-state
-                                  :execution/ctx   next-data}
-                                 (if next-resumers
-                                   {:execution/pause-state  "wait-fx"
-                                    :execution/pause-memory (assoc (:execution/pause-memory execution) :resumers next-resumers)}
-                                   {:execution/pause-state  (ready-or-await-pause-state states next-state)
-                                    :execution/pause-memory nil}))
-                          nil
-                          [{:id (str "returned(" action-id ")") :ref rid :return? true}]
-                          nil))))
-           (let [actions (vec actions)
-                 size    (count actions)]
-             (loop [i 0]
-               (if (= i size)
-                 (if (and (nil? action-name) (= "ready" (:execution/pause-state execution)))
-                   (->Result (assoc (next-ver execution) :execution/pause-state "await-input") nil nil nil)
-                   (->Result execution nil nil
-                             #:error{:rejected?        true
-                                     :code             :no-matched-actions
-                                     :reason           "No actions matched requirements"
-                                     :requested-action action-name
-                                     :possible-actions (set (map #(select-keys % [:id :when]) actions))}))
-                 (let [action (actions i)
-                       wh     (:when action)]
-                   (if (or (nil? wh)
-                           (and (or (string? wh)
-                                    (keyword? wh)) ;; match by input ::action
-                                (= action-name wh))
-                           (and (not (string? wh)) ;; match by expression
-                                (eval-expr! wh data input)))
-                     (cond
-                       (:invoke action)
-                       (let [invoke (:invoke action)]
-                         (cond
-                           (:state-machine invoke)
-                           (let [async?           (boolean (:async? invoke))
-                                 aid              (:id action)
-                                 eid              (random-execution-id!)
-                                 rid              (random-resume-id!)
-                                 next-state       (or (:state action) state)
-                                 next-data        (if (or (:ctx action) (:context action))
-                                                    (eval-expr! (or (:ctx action) (:context action)) data input)
-                                                    data)
-                                 state-machine-id (eval-expr! (:state-machine invoke) data input)
-                                 statem-input     (merge (:input invoke)
-                                                         (when-let [eio (:execution/io execution)] {::io eio})
-                                                         (when-not async? {::return-to [(:execution/id execution) rid]}))]
-                             (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait-fx"
-                                               :execution/pause-memory {:action-id        aid
-                                                                        :execution-id     eid
-                                                                        :state-machine-id state-machine-id
-                                                                        :original-input   input
-                                                                        :resumers         {rid {:then (select-keys invoke [:state :ctx :context])}}}
-                                               :execution/state        next-state
-                                               :execution/ctx          next-data})
-                                       [{:op           :execution/start
-                                         :args         {:state-machine-id state-machine-id
-                                                        :execution-id     eid
-                                                        :input            (eval-expr! statem-input data input)
-                                                        :async?           async?}
-                                         :complete-ref rid}]
-                                       [{:id (:id action)}]
-                                       nil))
-
-                           (:execution invoke)
-                           (let [async?     (boolean (:async? invoke))
-                                 aid        (:id action)
-                                 rid        (random-resume-id!)
-                                 eid        (random-execution-id!)
-                                 exec-input (:input invoke)
-                                 next-state (or (:state invoke) state)
-                                 next-data  (if (or (:ctx action) (:context action))
-                                              (eval-expr! (or (:ctx action) (:context action)) data input)
-                                              data)]
-                             (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait-fx"
-                                               :execution/pause-memory {:action-id      aid
-                                                                        :execution-id   eid
-                                                                        :original-input input
-                                                                        :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}
-                                               :execution/state        next-state
-                                               :execution/ctx          next-data})
-                                       [{:op           :execution/step
-                                         :args         {:execution-id eid
-                                                        :action       action-name
-                                                        :input        (eval-expr! exec-input data input)
-                                                        :async?       async?}
-                                         :complete-ref rid}]
-                                       [{:id (:id action)}]
-                                       nil))
-
-                           (:io invoke) ;; v2 of :call
-                           (let [effect (:io invoke)
-                                 rid    (random-resume-id!)]
-                             (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait-fx"
-                                               :execution/pause-memory {:action-id      (:id action)
-                                                                        :original-input input
-                                                                        :resumers       {rid {:then {:state (list 'if '(:ok *output*)
-                                                                                                                  (:state (:success invoke))
-                                                                                                                  (:state (:failure invoke)))
-                                                                                                     :ctx   (list 'if '(:ok *output*)
-                                                                                                                  (or (:ctx (:success invoke)) '*ctx*)
-                                                                                                                  (or (:ctx (:failure invoke)) '*ctx*))}}}}})
-                                       [{:op           :invoke/io
-                                         :args         {:input input
-                                                        :expr  (apply list 'io effect)}
-                                         :complete-ref rid}]
-                                       [{:id (:id action)}]
-                                       nil))
-
-                           (:call invoke)
-                           (let [effect (:call invoke)
-                                 rid    (random-resume-id!)]
-                             (->Result (merge (next-ver execution)
-                                              {:execution/pause-state  "wait-fx"
-                                               :execution/pause-memory {:action-id      (:id action)
-                                                                        :original-input input
-                                                                        :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}})
-                                       [{:op           :invoke/io
-                                         :args         {:input input
-                                                        :expr  effect}
-                                         :complete-ref rid}]
-                                       [{:id (:id action)}]
-                                       nil))
-
-                           :else (throw (ex-info "Unrecognized :invoke" {:action action
-                                                                         :invoke invoke}))))
-
-                       (:wait-for action)
-                       (try?
-                        execution action
-                        (let [{:keys [seconds timestamp] :as wait-for} (:wait-for action)
-                              resume-id                                (random-resume-id!)
-                              next-state                               (or (:state action) state)
-                              next-data                                (if (or (:ctx action) (:context action))
-                                                                         (eval-expr! (or (:ctx action) (:context action)) data input)
-                                                                         data)]
+                     [next-state next-data]
+                     (if (:if then)
+                       (let [branch (if (eval-expr! (:if then) data original-input (:return resume))
+                                      (:then then)
+                                      (:else then))]
+                         [(or (:state branch) state)
+                          (if (:ctx branch)
+                            (eval-expr! (:ctx branch) data original-input (:return resume))
+                            data)])
+                       [(or (:state then) state)
+                        (if (or (:ctx then) (:context then))
+                          (eval-expr! (or (:ctx then) (:context then)) data original-input (:return resume))
+                          data)])
+                     next-resumers (not-empty (dissoc (:resumers (:execution/pause-memory execution)) rid))]
+                 #_(debug-print "RESUME" (:execution/state-machine-id execution) resume)
+                 (->Result (merge (next-ver execution)
+                                  {:execution/state next-state
+                                   :execution/ctx   next-data}
+                                  (if next-resumers
+                                    {:execution/pause-state  "wait-fx"
+                                     :execution/pause-memory (assoc (:execution/pause-memory execution) :resumers next-resumers)}
+                                    {:execution/pause-state  (ready-or-await-pause-state states next-state)
+                                     :execution/pause-memory nil}))
+                           nil
+                           [{:id (str "returned(" action-id ")") :ref rid :return? true}]
+                           nil))))
+            (let [actions (vec actions)
+                  size    (count actions)]
+              (loop [i 0]
+                (if (= i size)
+                  (if (and (nil? action-name) (= "ready" (:execution/pause-state execution)))
+                    (->Result (assoc (next-ver execution) :execution/pause-state "await-input") nil nil nil)
+                    (->Result execution nil nil
+                              #:error{:rejected?        true
+                                      :code             :no-matched-actions
+                                      :reason           "No actions matched requirements"
+                                      :requested-action action-name
+                                      :possible-actions (set (map #(select-keys % [:id :when]) actions))}))
+                  (let [action (actions i)
+                        wh     (:when action)]
+                    (if (or (nil? wh)
+                            (and (or (string? wh)
+                                     (keyword? wh)) ;; match by input ::action
+                                 (= action-name wh))
+                            (and (not (string? wh)) ;; match by expression
+                                 (eval-expr! wh data input)))
+                      (cond
+                        (:invoke action)
+                        (let [invoke (:invoke action)]
                           (cond
-                            seconds
-                            (->Result (merge (next-ver execution)
-                                             {:execution/pause-state  "wait-fx"
-                                              :execution/pause-memory {:action-id      (:id action)
-                                                                       :original-input input
-                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
-                                              :execution/state        next-state
-                                              :execution/ctx          next-data
-                                              :execution/input        input})
-                                      [{:op           :sleep/seconds
-                                        :args         {:seconds (eval-expr! seconds data input)}
-                                        :complete-ref resume-id}]
-                                      [{:id (:id action)}]
-                                      nil)
+                            (:state-machine invoke)
+                            (let [async?           (boolean (:async? invoke))
+                                  aid              (:id action)
+                                  eid              (random-execution-id!)
+                                  rid              (random-resume-id!)
+                                  next-state       (or (:state action) state)
+                                  next-data        (if (or (:ctx action) (:context action))
+                                                     (eval-expr! (or (:ctx action) (:context action)) data input)
+                                                     data)
+                                  state-machine-id (eval-expr! (:state-machine invoke) data input)
+                                  statem-input     (merge (:input invoke)
+                                                          {:execution/parent-id (:execution/id execution)}
+                                                          (when-let [eio (:execution/io execution)] {::io eio})
+                                                          (when-not async? {::return-to [(:execution/id execution) rid]}))]
+                              (->Result (merge (next-ver execution)
+                                               {:execution/pause-state  "wait-fx"
+                                                :execution/pause-memory {:action-id        aid
+                                                                         :execution-id     eid
+                                                                         :state-machine-id state-machine-id
+                                                                         :original-input   input
+                                                                         :resumers         {rid {:then (select-keys invoke [:state :ctx :context])}}}
+                                                :execution/state        next-state
+                                                :execution/ctx          next-data})
+                                        [{:op           :execution/start
+                                          :args         {:state-machine-id state-machine-id
+                                                         :execution-id     eid
+                                                         :input            (eval-expr! statem-input data input)
+                                                         :async?           async?}
+                                          :complete-ref rid}]
+                                        [{:id (:id action)}]
+                                        nil))
 
-                            timestamp
-                            (->Result (merge (next-ver execution)
-                                             {:execution/pause-state  "wait-fx"
-                                              :execution/pause-memory {:action-id      (:id action)
-                                                                       :original-input input
-                                                                       :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
-                                              :execution/state        next-state
-                                              :execution/ctx          next-data
-                                              :execution/input        input})
-                                      [{:op           :sleep/timestamp
-                                        :args         {:timestamp (eval-expr! timestamp data input)}
-                                        :complete-ref resume-id}]
-                                      [{:id (:id action)}]
-                                      nil)
+                            (:execution invoke)
+                            (let [async?     (boolean (:async? invoke))
+                                  aid        (:id action)
+                                  rid        (random-resume-id!)
+                                  eid        (random-execution-id!)
+                                  exec-input (:input invoke)
+                                  next-state (or (:state invoke) state)
+                                  next-data  (if (or (:ctx action) (:context action))
+                                               (eval-expr! (or (:ctx action) (:context action)) data input)
+                                               data)]
+                              (->Result (merge (next-ver execution)
+                                               {:execution/pause-state  "wait-fx"
+                                                :execution/pause-memory {:action-id      aid
+                                                                         :execution-id   eid
+                                                                         :original-input input
+                                                                         :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}
+                                                :execution/state        next-state
+                                                :execution/ctx          next-data})
+                                        [{:op           :execution/step
+                                          :args         {:execution-id eid
+                                                         :action       action-name
+                                                         :input        (eval-expr! exec-input data input)
+                                                         :async?       async?}
+                                          :complete-ref rid}]
+                                        [{:id (:id action)}]
+                                        nil))
 
-                            :else
-                            (->Result execution
-                                      nil
-                                      [{:id (:id action)}]
-                                      #:error{:code   :invalid-action
-                                              :reason "Unrecognized wait-for action"
-                                              :action action}))))
+                            (:io invoke) ;; v2 of :call
+                            (let [effect (:io invoke)
+                                  rid    (random-resume-id!)]
+                              (->Result (merge (next-ver execution)
+                                               {:execution/pause-state  "wait-fx"
+                                                :execution/pause-memory {:action-id      (:id action)
+                                                                         :original-input input
+                                                                         :resumers       {rid {:then {:if   '(:ok *output*)
+                                                                                                      :then {:state (:state (:success invoke))
+                                                                                                             :ctx   (or (:ctx (:success invoke)) '*ctx*)}
+                                                                                                      :else {:state (:state (:success invoke))
+                                                                                                             :ctx   (or (:ctx (:failure invoke)) '*ctx*)}}}}}})
+                                        [{:op           :invoke/io
+                                          :args         {:input input
+                                                         :expr  (apply list 'io effect)}
+                                          :complete-ref rid}]
+                                        [{:id (:id action)}]
+                                        nil))
 
-                       (:if action)
-                       (try?
-                        execution action
-                        (let [condition  (eval-expr! (:if action) data input)
-                              clause     (if condition (:then condition) (:else condition))
-                              next-state (or (:state clause) state)
-                              next-data  (if (or (:ctx clause) (:context clause))
-                                           (eval-expr! (or (:ctx clause) (:context clause)) data input)
+                            (:call invoke)
+                            (let [effect (:call invoke)
+                                  rid    (random-resume-id!)]
+                              (->Result (merge (next-ver execution)
+                                               {:execution/pause-state  "wait-fx"
+                                                :execution/pause-memory {:action-id      (:id action)
+                                                                         :original-input input
+                                                                         :resumers       {rid {:then (select-keys invoke [:state :ctx :context])}}}})
+                                        [{:op           :invoke/io
+                                          :args         {:input input
+                                                         :expr  effect}
+                                          :complete-ref rid}]
+                                        [{:id (:id action)}]
+                                        nil))
+
+                            :else (throw (ex-info "Unrecognized :invoke" {:action action
+                                                                          :invoke invoke}))))
+
+                        (:wait-for action)
+                        (try?
+                         execution action
+                         (let [{:keys [seconds timestamp] :as wait-for} (:wait-for action)
+                               resume-id                                (random-resume-id!)
+                               next-state                               (or (:state action) state)
+                               next-data                                (if (or (:ctx action) (:context action))
+                                                                          (eval-expr! (or (:ctx action) (:context action)) data input)
+                                                                          data)]
+                           (cond
+                             seconds
+                             (->Result (merge (next-ver execution)
+                                              {:execution/pause-state  "wait-fx"
+                                               :execution/pause-memory {:action-id      (:id action)
+                                                                        :original-input input
+                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
+                                               :execution/state        next-state
+                                               :execution/ctx          next-data
+                                               :execution/input        input})
+                                       [{:op           :sleep/seconds
+                                         :args         {:seconds (eval-expr! seconds data input)}
+                                         :complete-ref resume-id}]
+                                       [{:id (:id action)}]
+                                       nil)
+
+                             timestamp
+                             (->Result (merge (next-ver execution)
+                                              {:execution/pause-state  "wait-fx"
+                                               :execution/pause-memory {:action-id      (:id action)
+                                                                        :original-input input
+                                                                        :resumers       {resume-id {:then (select-keys wait-for [:state :ctx :context])}}}
+                                               :execution/state        next-state
+                                               :execution/ctx          next-data
+                                               :execution/input        input})
+                                       [{:op           :sleep/timestamp
+                                         :args         {:timestamp (eval-expr! timestamp data input)}
+                                         :complete-ref resume-id}]
+                                       [{:id (:id action)}]
+                                       nil)
+
+                             :else
+                             (->Result execution
+                                       nil
+                                       [{:id (:id action)}]
+                                       #:error{:code   :invalid-action
+                                               :reason "Unrecognized wait-for action"
+                                               :action action}))))
+
+                        (:if action)
+                        (try?
+                         execution action
+                         (let [condition  (eval-expr! (:if action) data input)
+                               clause     (if condition (:then condition) (:else condition))
+                               next-state (or (:state clause) state)
+                               next-data  (if (or (:ctx clause) (:context clause))
+                                            (eval-expr! (or (:ctx clause) (:context clause)) data input)
+                                            data)]
+                           (->Result (merge (next-ver execution)
+                                            {:execution/pause-state  (ready-or-await-pause-state states next-state)
+                                             :execution/pause-memory nil
+                                             :execution/state        next-state
+                                             :execution/ctx          next-data
+                                             :execution/input        input})
+                                     nil
+                                     [{:id (:id action)}]
+                                     nil)))
+
+                        (or (:state action) (:ctx action) (:context action))
+                        (let [next-state (or (:state action) state)
+                              next-data  (if (or (:ctx action) (:context action))
+                                           (eval-expr! (or (:ctx action) (:context action)) data input)
                                            data)]
                           (->Result (merge (next-ver execution)
                                            {:execution/pause-state  (ready-or-await-pause-state states next-state)
@@ -460,32 +486,22 @@
                                             :execution/input        input})
                                     nil
                                     [{:id (:id action)}]
-                                    nil)))
+                                    nil))
 
-                       (or (:state action) (:ctx action) (:context action))
-                       (let [next-state (or (:state action) state)
-                             next-data  (if (or (:ctx action) (:context action))
-                                          (eval-expr! (or (:ctx action) (:context action)) data input)
-                                          data)]
-                         (->Result (merge (next-ver execution)
-                                          {:execution/pause-state  (ready-or-await-pause-state states next-state)
-                                           :execution/pause-memory nil
-                                           :execution/state        next-state
-                                           :execution/ctx          next-data
-                                           :execution/input        input})
-                                   nil
-                                   [{:id (:id action)}]
-                                   nil))
-
-                       :else
-                       (->Result execution
-                                 nil
-                                 nil
-                                 #:error{:code    :invalid-action
-                                         :reason  "Unrecognized action"
-                                         :choices actions
-                                         :action  action}))
-                     (recur (inc i)))))))))
+                        :else
+                        (->Result execution
+                                  nil
+                                  nil
+                                  #:error{:code    :invalid-action
+                                          :reason  "Unrecognized action"
+                                          :choices actions
+                                          :action  action}))
+                      (recur (inc i)))))))))
+        (catch IllegalArgumentException t
+          (->Result execution nil nil
+                    #:error{:code      :internal-error
+                            :reason    (str "Assertion error: " (.getMessage t))
+                            :input     input})))
        assoc :previous execution))))
 
 
